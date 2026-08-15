@@ -175,6 +175,8 @@ var ALLOWED_ACTIONS = [
   'sendOTPKanak', 'sendOTPDewasa', 'confirmRegisterKanak', 'confirmRegisterDewasa',
   'attendance', 'getDashboardStats', 'getKehadiranHariIni', 'getMuridList',
   'getGuru', 'getYuranStats', 'getEbayarStats', 'getYuranParent',
+  'getNativeEbayarStudentLookup', 'preflightNativeEbayarSubmission', 'submitNativeEbayarPayment',
+  'getEbayarPortalMode', 'setEbayarPortalMode',
   'recordCash', 'syncForms', 'syncFormBulanIni', 'updateStatusMurid', 'getMuridListAll',
   'getKehadiranStats', 'getKehadiranRekod', 'getMuridByGuru', 'simpanKehadiran',
   'uploadGuruGambar', 'updateGuru', 'getOrgChart', 'hantarWAYuran',
@@ -201,7 +203,7 @@ var AUTH_REQUIRED_ACTIONS = [
   'ensureEbayarMasterSchemaV2', 'listEbayarYears', 'getMonthlyPaymentSummaryV2',
   'getYuranStatsV2', 'getYuranParentV2', 'compareYuranLegacyVsV2',
   'getEbayarV2MaintenanceStatus', 'previewCurrentMonthEbayarV2', 'verifyCurrentMonthLegacyVsV2',
-  'syncCurrentMonthEbayarV2',
+  'syncCurrentMonthEbayarV2', 'setEbayarPortalMode',
   'auditEbayarSourceTabsV2',
   'getMuridByGuruUntukTukar', 'tukarGuruMurid',
   'getMuridTanpaGuru', 'assignGuruMurid'
@@ -258,6 +260,11 @@ function doPost(e) {
     else if (action === 'getYuranStats')          result = getYuranStats(body);
     else if (action === 'getEbayarStats')         result = getEbayarStats();
     else if (action === 'getYuranParent')         result = getYuranParent(body);
+    else if (action === 'getNativeEbayarStudentLookup') result = getNativeEbayarStudentLookup(body);
+    else if (action === 'preflightNativeEbayarSubmission') result = preflightNativeEbayarSubmission(body);
+    else if (action === 'submitNativeEbayarPayment') result = submitNativeEbayarPayment(body);
+    else if (action === 'getEbayarPortalMode')     result = getEbayarPortalMode(body);
+    else if (action === 'setEbayarPortalMode')     result = setEbayarPortalMode(body);
     else if (action === 'recordCash')             result = recordCash(body);
     else if (action === 'syncForms')              result = syncNamaMuridToAllForms();
     else if (action === 'syncFormBulanIni')       result = syncFormMinusBayar(body);
@@ -406,6 +413,11 @@ function doAction(action, payload) {
   else if (action === 'getYuranStats')         return getYuranStats(payload);
   else if (action === 'getEbayarStats')        return getEbayarStats();
   else if (action === 'getYuranParent')        return getYuranParent(payload);
+  else if (action === 'getNativeEbayarStudentLookup') return getNativeEbayarStudentLookup(payload);
+  else if (action === 'preflightNativeEbayarSubmission') return preflightNativeEbayarSubmission(payload);
+  else if (action === 'submitNativeEbayarPayment') return submitNativeEbayarPayment(payload);
+  else if (action === 'getEbayarPortalMode')     return getEbayarPortalMode(payload);
+  else if (action === 'setEbayarPortalMode')     return setEbayarPortalMode(payload);
   else if (action === 'recordCash')            return recordCash(payload);
   else if (action === 'syncForms')             return syncNamaMuridToAllForms();
   else if (action === 'syncFormBulanIni')      return syncFormMinusBayar(payload);
@@ -2079,6 +2091,86 @@ var EBAYAR_MONTHS_V2 = [
   { key: '12', short: 'DIS',   label: 'Disember',  legacy: 'DIS2026' }
 ];
 
+var NATIVE_EBAYAR_MVP_MAX_FILE_SIZE_V2 = 3 * 1024 * 1024;
+var NATIVE_EBAYAR_SLIP_FOLDER_PROPERTY_V2_ = 'NATIVE_EBAYAR_SLIP_FOLDER_ID';
+var EBAYAR_PORTAL_MODE_PROPERTY_ = 'EBAYAR_PORTAL_MODE';
+var EBAYAR_PORTAL_MODE_UPDATED_AT_PROPERTY_ = 'EBAYAR_PORTAL_MODE_UPDATED_AT';
+var EBAYAR_PORTAL_MODE_UPDATED_BY_PROPERTY_ = 'EBAYAR_PORTAL_MODE_UPDATED_BY';
+var EBAYAR_PORTAL_NATIVE_START_DATE_ = '2026-09-01';
+var EBAYAR_PORTAL_ALLOWED_MODES_ = ['AUTO', 'LEGACY', 'NATIVE', 'BOTH'];
+
+function getEbayarPortalModeState_() {
+  var timezone = 'Asia/Kuala_Lumpur';
+  var serverDate = Utilities.formatDate(new Date(), timezone, 'yyyy-MM-dd');
+  var rawMode = PropertiesService.getScriptProperties().getProperty(EBAYAR_PORTAL_MODE_PROPERTY_);
+  var configuredMode = (rawMode || '').toString().trim().toUpperCase();
+  if (EBAYAR_PORTAL_ALLOWED_MODES_.indexOf(configuredMode) === -1) configuredMode = 'AUTO';
+  var resolvedMode = configuredMode === 'AUTO'
+    ? (serverDate < EBAYAR_PORTAL_NATIVE_START_DATE_ ? 'LEGACY' : 'NATIVE')
+    : configuredMode;
+  return {
+    configuredMode: configuredMode,
+    resolvedMode: resolvedMode,
+    nativeStartDate: EBAYAR_PORTAL_NATIVE_START_DATE_,
+    serverDate: serverDate
+  };
+}
+
+function getEbayarPortalMode(params) {
+  try {
+    var state = getEbayarPortalModeState_();
+    return {
+      success: true,
+      configuredMode: state.configuredMode,
+      resolvedMode: state.resolvedMode,
+      nativeStartDate: state.nativeStartDate,
+      serverDate: state.serverDate,
+      message: state.configuredMode === 'AUTO'
+        ? 'Mode AUTO diselesaikan kepada ' + state.resolvedMode + '.'
+        : 'Manual override ' + state.configuredMode + ' aktif.'
+    };
+  } catch (err) {
+    Logger.log('getEbayarPortalMode error: ' + err.message);
+    return {
+      success: false,
+      configuredMode: 'AUTO',
+      resolvedMode: 'LEGACY',
+      nativeStartDate: EBAYAR_PORTAL_NATIVE_START_DATE_,
+      serverDate: Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'yyyy-MM-dd'),
+      message: 'Mode portal eBayar tidak dapat dimuatkan.'
+    };
+  }
+}
+
+function setEbayarPortalMode(params) {
+  params = params || {};
+  var admin = authorizeEbayarV2MaintenanceAdmin_(params);
+  if (!admin.valid) return { success: false, configuredMode: '', resolvedMode: '', message: admin.message };
+
+  var mode = (params.mode || '').toString().trim().toUpperCase();
+  if (EBAYAR_PORTAL_ALLOWED_MODES_.indexOf(mode) === -1) {
+    return { success: false, configuredMode: '', resolvedMode: '', message: 'Mode portal eBayar tidak sah.' };
+  }
+
+  try {
+    var timezone = 'Asia/Kuala_Lumpur';
+    var props = PropertiesService.getScriptProperties();
+    props.setProperty(EBAYAR_PORTAL_MODE_PROPERTY_, mode);
+    props.setProperty(EBAYAR_PORTAL_MODE_UPDATED_AT_PROPERTY_, Utilities.formatDate(new Date(), timezone, 'yyyy-MM-dd HH:mm:ss Z'));
+    props.setProperty(EBAYAR_PORTAL_MODE_UPDATED_BY_PROPERTY_, admin.email);
+    var state = getEbayarPortalModeState_();
+    return {
+      success: true,
+      configuredMode: state.configuredMode,
+      resolvedMode: state.resolvedMode,
+      message: 'Mode portal eBayar berjaya ditetapkan kepada ' + state.configuredMode + '.'
+    };
+  } catch (err) {
+    Logger.log('setEbayarPortalMode error: ' + err.message);
+    return { success: false, configuredMode: '', resolvedMode: '', message: 'Mode portal eBayar gagal dikemaskini.' };
+  }
+}
+
 function normalizeYuranNameV2_(name) {
   return (name || '').toString().replace(/\s+/g, ' ').trim().toUpperCase();
 }
@@ -2214,6 +2306,574 @@ function getPaymentsRowsV2_() {
     return obj;
   });
   return { rows: rows, headers: headers };
+}
+
+function getNativeEbayarOfficialStudentsV2_() {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var studentsByKey = {};
+  var ambiguousKeys = {};
+
+  function collect(sheetName, columns, studentType) {
+    var sheet = ss.getSheetByName(sheetName);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    var width = Math.max(columns.BIL, columns.NAMA, columns.STATUS, columns.GURU) + 1;
+    var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues();
+    rows.forEach(function(row) {
+      var bil = (row[columns.BIL] === null || row[columns.BIL] === undefined)
+        ? ''
+        : row[columns.BIL].toString().trim();
+      var canonicalName = normalizeYuranNameV2_(row[columns.NAMA]);
+      var status = (row[columns.STATUS] || '').toString().trim().toUpperCase();
+      if (!bil || !/^[A-Za-z0-9._-]{1,40}$/.test(bil) || !canonicalName || (status && status !== 'AKTIF')) return;
+      var studentKey = studentType + ':' + bil;
+      if (studentsByKey[studentKey] || ambiguousKeys[studentKey]) {
+        delete studentsByKey[studentKey];
+        ambiguousKeys[studentKey] = true;
+        return;
+      }
+      var guru = normalizeYuranNameV2_(row[columns.GURU]);
+      studentsByKey[studentKey] = {
+        studentKey: studentKey,
+        nama: canonicalName,
+        studentType: studentType,
+        guru: guru
+      };
+    });
+  }
+
+  collect(TAB.KANAK, COL_KANAK, 'KANAK');
+  collect(TAB.DEWASA, COL_DEWASA, 'DEWASA');
+  return { byKey: studentsByKey, ambiguousKeys: ambiguousKeys };
+}
+
+function getNativeEbayarStudentLookup(params) {
+  params = params || {};
+  try {
+    var keyword = normalizeYuranNameV2_(params.keyword);
+    if (keyword.length < 2) {
+      return { success: false, message: 'Masukkan sekurang-kurangnya 2 aksara untuk mencari murid.', results: [] };
+    }
+    if (keyword.length > 80) {
+      return { success: false, message: 'Kata carian terlalu panjang.', results: [] };
+    }
+    var bulanKey = (params.bulanKey || '').toString().trim();
+    if (!/^2026-(0[1-9]|1[0-2])$/.test(bulanKey)) {
+      return { success: false, message: 'Bulan bayaran tidak sah.', results: [] };
+    }
+    if (bulanKey < '2026-09') {
+      return { success: false, message: 'Native eBayar bermula September 2026.', results: [] };
+    }
+    var currentMonthKey = Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'yyyy-MM');
+    if (bulanKey > currentMonthKey) {
+      return { success: false, message: 'Bulan akan datang belum boleh dipilih.', results: [] };
+    }
+
+    var studentDirectory = getNativeEbayarOfficialStudentsV2_();
+    var students = studentDirectory.byKey;
+    var alreadyPaidByStudentId = {};
+    var alreadyPaidLegacyNames = {};
+    var payments = getPaymentsRowsV2_();
+    (payments.rows || []).forEach(function(row) {
+      var rowMonth = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN || row.SOURCE_YEAR, row.BULAN || row.SOURCE_SHEET);
+      if (rowMonth !== bulanKey) return;
+      var rowStudentId = (row.STUDENT_ID || '').toString().trim();
+      var rowName = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+      if (rowStudentId) alreadyPaidByStudentId[rowStudentId] = true;
+      else if (rowName) alreadyPaidLegacyNames[rowName] = true;
+    });
+    var results = Object.keys(students).map(function(studentKey) {
+      return students[studentKey];
+    }).filter(function(student) {
+      return student.nama.indexOf(keyword) !== -1 &&
+        !alreadyPaidByStudentId[student.studentKey] &&
+        !alreadyPaidLegacyNames[student.nama];
+    }).sort(function(a, b) {
+      return a.nama === b.nama ? a.studentKey.localeCompare(b.studentKey) : a.nama.localeCompare(b.nama);
+    }).slice(0, 20).map(function(student) {
+      return {
+        studentKey: student.studentKey,
+        nama: student.nama,
+        studentType: student.studentType,
+        guru: student.guru
+      };
+    });
+    return { success: true, results: results, cappedAt: 20 };
+  } catch (err) {
+    Logger.log('getNativeEbayarStudentLookup error: ' + err.message);
+    return { success: false, message: 'Carian murid tidak dapat dijalankan.', results: [] };
+  }
+}
+
+function sanitizeNativeEbayarFileNameV2_(value) {
+  var raw = (value === null || value === undefined) ? '' : value.toString();
+  raw = raw.split(/[\\/]/).pop().replace(/[<>:"/\\|?*\u0000-\u001F\u007F]/g, '_');
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+function sanitizeNativeEbayarReferenceV2_(value) {
+  var raw = (value === null || value === undefined) ? '' : value.toString();
+  return raw.replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/[^A-Za-z0-9 ._/#:\-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function validateNativeEbayarSubmissionV2_(params) {
+  params = params || {};
+  var responseBase = {
+    success: false,
+    readyToSubmit: false,
+    students: [],
+    studentChecks: [],
+    hasDuplicate: false
+  };
+
+  function fail(message) {
+    var result = {};
+    Object.keys(responseBase).forEach(function(key) { result[key] = responseBase[key]; });
+    result.message = message;
+    return result;
+  }
+
+  try {
+    if (!Array.isArray(params.students)) return fail('Senarai murid tidak sah.');
+    if (params.students.length < 1) return fail('Sila pilih sekurang-kurangnya seorang murid daripada senarai rasmi SPKM.');
+    if (params.students.length > 5) return fail('Maksimum 5 murid dibenarkan untuk satu bayaran.');
+
+    var officialStudentDirectory = getNativeEbayarOfficialStudentsV2_();
+    var officialStudents = officialStudentDirectory.byKey;
+    var requestedStudentKeys = {};
+    var requestedNames = {};
+    var canonicalStudents = [];
+    var resolvedStudents = [];
+    for (var studentIndex = 0; studentIndex < params.students.length; studentIndex++) {
+      var studentParam = params.students[studentIndex];
+      if (!studentParam || typeof studentParam !== 'object') return fail('Identiti murid tidak sah. Sila pilih semula murid daripada carian rasmi SPKM.');
+      var studentKey = (studentParam.studentKey || '').toString().trim();
+      var rawStudentName = (studentParam && typeof studentParam === 'object') ? studentParam.namaMurid : studentParam;
+      var requestedName = normalizeYuranNameV2_(rawStudentName);
+      if (!/^(KANAK|DEWASA):[A-Za-z0-9._-]{1,40}$/.test(studentKey)) {
+        return fail('Identiti murid tidak sah atau telah luput. Sila pilih semula murid daripada carian rasmi SPKM.');
+      }
+      if (!requestedName || requestedName.length > 150) return fail('Nama murid tidak sah. Sila pilih murid daripada senarai rasmi SPKM.');
+      if (requestedStudentKeys[studentKey]) return fail('Murid yang sama tidak boleh dipilih lebih daripada sekali.');
+      var officialStudent = officialStudents[studentKey];
+      if (!officialStudent || officialStudent.nama !== requestedName) {
+        return fail('Identiti atau nama murid tidak lagi sepadan dengan rekod aktif. Sila cari dan pilih semula murid.');
+      }
+      requestedStudentKeys[studentKey] = true;
+      requestedNames[requestedName] = true;
+      canonicalStudents.push(officialStudent.nama);
+      resolvedStudents.push(officialStudent);
+    }
+
+    var bulanKey = (params.bulanKey || '').toString().trim();
+    if (!/^2026-(0[1-9]|1[0-2])$/.test(bulanKey)) {
+      return fail('Bulan bayaran tidak sah. Native eBayar MVP hanya menyokong tahun 2026.');
+    }
+    if (bulanKey < '2026-09') {
+      return fail('Native eBayar bermula September 2026. Bayaran Januari hingga Ogos 2026 kekal melalui sistem legacy.');
+    }
+    var currentMonthKey = Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'yyyy-MM');
+    if (bulanKey > currentMonthKey) return fail('Bulan akan datang belum boleh dipilih.');
+    var monthMeta = getMonthMetaV2_(bulanKey);
+    if (!monthMeta) return fail('Bulan bayaran tidak disokong.');
+
+    var tarikhBayaran = (params.tarikhBayaran || '').toString().trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(tarikhBayaran)) return fail('Tarikh bayaran tidak sah.');
+    var parsedDate = new Date(tarikhBayaran + 'T00:00:00+08:00');
+    if (isNaN(parsedDate.getTime()) || Utilities.formatDate(parsedDate, 'Asia/Kuala_Lumpur', 'yyyy-MM-dd') !== tarikhBayaran) {
+      return fail('Tarikh bayaran tidak sah.');
+    }
+    var todayKey = Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'yyyy-MM-dd');
+    if (tarikhBayaran > todayKey) return fail('Tarikh bayaran tidak boleh berada pada masa hadapan.');
+
+    var amountValue = (params.jumlahKeseluruhan !== null && params.jumlahKeseluruhan !== undefined)
+      ? params.jumlahKeseluruhan
+      : params.jumlah;
+    var amountText = (amountValue === null || amountValue === undefined) ? '' : amountValue.toString().trim();
+    if (amountText.length > 15) return fail('Jumlah bayaran tidak sah.');
+    if (!/^\d+(?:\.\d{1,2})?$/.test(amountText)) return fail('Jumlah bayaran mesti nombor sah dengan maksimum dua tempat perpuluhan.');
+    var jumlah = parseFloat(amountText);
+    if (!isFinite(jumlah) || jumlah <= 0) return fail('Jumlah bayaran mesti lebih daripada RM0.');
+
+    var rawReference = (params.noRujukan === null || params.noRujukan === undefined) ? '' : params.noRujukan.toString().trim();
+    if (rawReference.length > 80) return fail('No. rujukan transaksi terlalu panjang. Maksimum 80 aksara.');
+    var noRujukan = sanitizeNativeEbayarReferenceV2_(rawReference);
+    if (rawReference && !noRujukan) return fail('No. rujukan transaksi mengandungi aksara yang tidak dibenarkan.');
+
+    var allowedMimeTypes = {
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'application/pdf': ['.pdf']
+    };
+    var mimeType = (params.mimeType || '').toString().trim().toLowerCase();
+    if (!allowedMimeTypes[mimeType]) return fail('Jenis fail tidak disokong. Gunakan JPEG, PNG, atau PDF sahaja.');
+    var rawFileName = (params.fileName === null || params.fileName === undefined) ? '' : params.fileName.toString();
+    if (rawFileName.length > 200) return fail('Nama fail slip terlalu panjang.');
+    var fileName = sanitizeNativeEbayarFileNameV2_(rawFileName);
+    if (!fileName) return fail('Nama fail slip tidak sah.');
+    var lowerFileName = fileName.toLowerCase();
+    var extensionValid = allowedMimeTypes[mimeType].some(function(extension) {
+      return lowerFileName.slice(-extension.length) === extension;
+    });
+    if (!extensionValid) return fail('Sambungan fail tidak sepadan dengan jenis slip yang dipilih.');
+    var fileSize = Number(params.fileSize);
+    if (!isFinite(fileSize) || fileSize <= 0 || Math.floor(fileSize) !== fileSize) return fail('Saiz fail slip tidak sah.');
+    if (fileSize > NATIVE_EBAYAR_MVP_MAX_FILE_SIZE_V2) return fail('Saiz slip melebihi had 3 MB.');
+
+    var duplicateByStudentKey = {};
+    var payments = getPaymentsRowsV2_();
+    (payments.rows || []).forEach(function(row) {
+      var rowName = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+      var rowMonth = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN || row.SOURCE_YEAR, row.BULAN || row.SOURCE_SHEET);
+      if (rowMonth !== bulanKey) return;
+      var rowStudentId = (row.STUDENT_ID || '').toString().trim();
+      var matchedStudentKeys = [];
+      if (rowStudentId && requestedStudentKeys[rowStudentId]) {
+        matchedStudentKeys.push(rowStudentId);
+      } else if (!rowStudentId && requestedNames[rowName]) {
+        resolvedStudents.forEach(function(student) {
+          if (student.nama === rowName) matchedStudentKeys.push(student.studentKey);
+        });
+      }
+      if (!matchedStudentKeys.length) return;
+      var existingAmount = parseEbayarAmountV2_(row.AMOUNT_TOTAL || row.JUMLAH);
+      matchedStudentKeys.forEach(function(matchedStudentKey) {
+        if (!duplicateByStudentKey[matchedStudentKey]) {
+          duplicateByStudentKey[matchedStudentKey] = {
+            status: (row.STATUS || '').toString().trim().toUpperCase(),
+            amount: (typeof existingAmount === 'number' && isFinite(existingAmount)) ? existingAmount : null
+          };
+        }
+      });
+    });
+
+    var hasDuplicate = false;
+    var studentChecks = resolvedStudents.map(function(student) {
+      var existing = duplicateByStudentKey[student.studentKey];
+      var check = {
+        studentKey: student.studentKey,
+        nama: student.nama,
+        duplicate: !!existing
+      };
+      if (existing) {
+        hasDuplicate = true;
+        check.existingStatus = existing.status;
+        check.existingAmount = existing.amount;
+      }
+      return check;
+    });
+
+    return {
+      success: true,
+      readyToSubmit: !hasDuplicate,
+      students: canonicalStudents,
+      studentRecords: resolvedStudents,
+      studentChecks: studentChecks,
+      bulanKey: bulanKey,
+      bulanLabel: monthMeta.label + ' 2026',
+      tarikhBayaran: tarikhBayaran,
+      jumlahKeseluruhan: jumlah,
+      noRujukan: noRujukan,
+      fileName: fileName,
+      mimeType: mimeType,
+      fileSize: fileSize,
+      hasDuplicate: hasDuplicate,
+      message: hasDuplicate
+        ? 'Satu atau lebih murid telah mempunyai rekod bayaran untuk bulan ini. Buang murid tersebut daripada pilihan sebelum meneruskan.'
+        : 'Maklumat bayaran telah disahkan dan sedia dihantar.'
+    };
+  } catch (err) {
+    Logger.log('validateNativeEbayarSubmissionV2_ error: ' + err.message);
+    return fail('Preflight bayaran tidak dapat diselesaikan. Sila cuba semula.');
+  }
+}
+
+function preflightNativeEbayarSubmission(params) {
+  var result = validateNativeEbayarSubmissionV2_(params || {});
+  delete result.studentRecords;
+  return result;
+}
+
+function makeNativeEbayarPaymentGroupIdV2_(bulanKey) {
+  var monthPart = (bulanKey || '').toString().replace(/[^0-9]/g, '');
+  var timestamp = Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'yyyyMMddHHmmss');
+  var randomPart = Utilities.getUuid().replace(/-/g, '').slice(0, 10).toUpperCase();
+  return 'NATIVE-' + monthPart + '-' + timestamp + '-' + randomPart;
+}
+
+function makeNativeEbayarSourceHashV2_(paymentGroupId, validated) {
+  var raw = [
+    paymentGroupId,
+    validated.bulanKey,
+    validated.tarikhBayaran,
+    Number(validated.jumlahKeseluruhan).toFixed(2),
+    validated.noRujukan,
+    validated.fileName,
+    validated.fileSize,
+    (validated.studentRecords || []).map(function(student) { return student.studentKey + ':' + student.nama; }).join('|')
+  ].join('|');
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw);
+  return bytes.map(function(byte) {
+    var value = byte < 0 ? byte + 256 : byte;
+    return ('0' + value.toString(16)).slice(-2);
+  }).join('');
+}
+
+function parseNativeEbayarNoteV2_(value) {
+  try {
+    var parsed = JSON.parse((value || '').toString());
+    return parsed && parsed.channel === 'NATIVE_EBAYAR' ? parsed : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function isNativeEbayarFileSignatureValidV2_(bytes, mimeType) {
+  var values = (bytes || []).slice(0, 8).map(function(byte) { return byte < 0 ? byte + 256 : byte; });
+  if (mimeType === 'image/jpeg') return values.length >= 3 && values[0] === 0xFF && values[1] === 0xD8 && values[2] === 0xFF;
+  if (mimeType === 'image/png') {
+    return values.length >= 8 && values[0] === 0x89 && values[1] === 0x50 && values[2] === 0x4E && values[3] === 0x47 &&
+      values[4] === 0x0D && values[5] === 0x0A && values[6] === 0x1A && values[7] === 0x0A;
+  }
+  if (mimeType === 'application/pdf') {
+    return values.length >= 5 && values[0] === 0x25 && values[1] === 0x50 && values[2] === 0x44 && values[3] === 0x46 && values[4] === 0x2D;
+  }
+  return false;
+}
+
+function submitNativeEbayarPayment(params) {
+  params = params || {};
+  var mode = 'NATIVE_EBAYAR_SUBMISSION';
+  var lock = null;
+  var uploadedFile = null;
+  var sheetWriteCompleted = false;
+
+  function failure(message, extra) {
+    var result = { success: false, mode: mode, message: message };
+    Object.keys(extra || {}).forEach(function(key) { result[key] = extra[key]; });
+    return result;
+  }
+
+  try {
+    var portalMode = getEbayarPortalModeState_();
+    if (portalMode.resolvedMode !== 'NATIVE' && portalMode.resolvedMode !== 'BOTH') {
+      return failure('Native eBayar tidak aktif dalam mode portal semasa.');
+    }
+
+    var validated = validateNativeEbayarSubmissionV2_(params);
+    if (!validated.success || !validated.readyToSubmit) {
+      return failure(validated.message || 'Maklumat bayaran gagal disahkan.', {
+        hasDuplicate: validated.hasDuplicate === true,
+        studentChecks: validated.studentChecks || []
+      });
+    }
+
+    var rawEncoded = (params.fileDataBase64 || '').toString();
+    var maxEncodedLength = 4 * Math.ceil(NATIVE_EBAYAR_MVP_MAX_FILE_SIZE_V2 / 3) + 4;
+    if (rawEncoded.length > maxEncodedLength) {
+      return failure('Data slip melebihi had penghantaran yang dibenarkan.');
+    }
+    if (/\s/.test(rawEncoded)) {
+      return failure('Data slip mengandungi ruang kosong yang tidak dibenarkan. Sila pilih semula fail.');
+    }
+    var encoded = rawEncoded;
+    if (!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length % 4 !== 0) {
+      return failure('Data fail slip tidak sah. Sila pilih semula fail.');
+    }
+    var fileBytes;
+    try {
+      fileBytes = Utilities.base64Decode(encoded);
+    } catch (decodeErr) {
+      return failure('Data fail slip tidak dapat dibaca. Sila pilih semula fail.');
+    }
+    if (fileBytes.length !== validated.fileSize || fileBytes.length > NATIVE_EBAYAR_MVP_MAX_FILE_SIZE_V2) {
+      return failure('Saiz data slip tidak sepadan dengan metadata fail.');
+    }
+    if (!isNativeEbayarFileSignatureValidV2_(fileBytes, validated.mimeType)) {
+      return failure('Kandungan fail slip tidak sepadan dengan format JPEG, PNG, atau PDF yang dipilih.');
+    }
+
+    var folderId = (PropertiesService.getScriptProperties().getProperty(NATIVE_EBAYAR_SLIP_FOLDER_PROPERTY_V2_) || '').toString().trim();
+    if (!folderId) {
+      return failure('Konfigurasi folder slip Native eBayar belum tersedia. Sila hubungi pentadbir.', {
+        mode: 'NATIVE_EBAYAR_CONFIGURATION_BLOCKED'
+      });
+    }
+
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(30000)) {
+      return failure('Sistem bayaran sedang sibuk. Tiada data disimpan; sila cuba lagi kemudian.', {
+        mode: 'NATIVE_EBAYAR_LOCK_FAILED'
+      });
+    }
+
+    var lockedPortalMode = getEbayarPortalModeState_();
+    if (lockedPortalMode.resolvedMode !== 'NATIVE' && lockedPortalMode.resolvedMode !== 'BOTH') {
+      return failure('Native eBayar tidak lagi aktif dalam mode portal semasa. Tiada data disimpan.');
+    }
+
+    var freshValidation = validateNativeEbayarSubmissionV2_(params);
+    if (!freshValidation.success || !freshValidation.readyToSubmit) {
+      return failure(freshValidation.message || 'Bayaran tidak lagi boleh diteruskan. Tiada data disimpan.', {
+        hasDuplicate: freshValidation.hasDuplicate === true,
+        studentChecks: freshValidation.studentChecks || []
+      });
+    }
+
+    var paymentGroupId = makeNativeEbayarPaymentGroupIdV2_(freshValidation.bulanKey);
+    var safeUploadName = sanitizeNativeEbayarFileNameV2_(paymentGroupId + '_' + freshValidation.fileName);
+    var blob = Utilities.newBlob(fileBytes, freshValidation.mimeType, safeUploadName);
+    var folder;
+    try {
+      folder = DriveApp.getFolderById(folderId);
+      uploadedFile = folder.createFile(blob);
+    } catch (uploadErr) {
+      return failure('Slip gagal disimpan. Tiada rekod bayaran ditulis.', {
+        mode: 'NATIVE_EBAYAR_SLIP_UPLOAD_FAILED'
+      });
+    }
+
+    var spreadsheet = getEbayarMasterSpreadsheetForImportV2_();
+    var sheet = spreadsheet.getSheetByName(EBAYAR_PAYMENTS_TAB_V2);
+    if (!sheet) throw new Error('Payments tab tidak dijumpai.');
+    var headerIndex = getPaymentsHeaderIndexV2_(sheet);
+    var requiredHeaders = EBAYAR_PAYMENTS_HEADERS_V2.filter(function(header) {
+      return headerIndex[header] === undefined || headerIndex[header] === null;
+    });
+    if (requiredHeaders.length) {
+      throw new Error('Header Payments tidak lengkap: ' + requiredHeaders.join(', '));
+    }
+
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(function(header) {
+      return (header || '').toString().trim();
+    });
+    var now = new Date();
+    var timestampNow = Utilities.formatDate(now, 'Asia/Kuala_Lumpur', "yyyy-MM-dd'T'HH:mm:ssXXX");
+    var monthMeta = getMonthMetaV2_(freshValidation.bulanKey);
+    var slipMetadata = {
+      channel: 'NATIVE_EBAYAR',
+      paymentDate: freshValidation.tarikhBayaran,
+      transactionReference: freshValidation.noRujukan || '',
+      slipFileId: uploadedFile.getId(),
+      slipUrl: uploadedFile.getUrl(),
+      originalFileName: freshValidation.fileName,
+      mimeType: freshValidation.mimeType,
+      fileSize: freshValidation.fileSize
+    };
+    var note = JSON.stringify(slipMetadata);
+    var sourceHash = makeNativeEbayarSourceHashV2_(paymentGroupId, freshValidation);
+    var rowsToAppend = freshValidation.studentRecords.map(function(student, index) {
+      var rowObject = {
+        PAYMENT_ID: paymentGroupId + '-' + ('0' + (index + 1)).slice(-2),
+        PAYMENT_GROUP_ID: paymentGroupId,
+        TIMESTAMP: timestampNow,
+        TAHUN: freshValidation.bulanKey.slice(0, 4),
+        BULAN: monthMeta.label.toUpperCase(),
+        BULAN_KEY: freshValidation.bulanKey,
+        NAMA_MURID_RAW: student.nama,
+        NAMA_MURID_NORM: normalizeYuranNameV2_(student.nama),
+        STUDENT_ID: student.studentKey,
+        STUDENT_TYPE: student.studentType,
+        JUMLAH: freshValidation.jumlahKeseluruhan,
+        AMOUNT_TOTAL: freshValidation.jumlahKeseluruhan,
+        AMOUNT_ALLOCATED: '',
+        STATUS: 'SELESAI',
+        KAEDAH: 'NATIVE_EBAYAR',
+        RESIT_URL: '',
+        SOURCE_YEAR: freshValidation.bulanKey.slice(0, 4),
+        SOURCE_SHEET: 'NATIVE_EBAYAR',
+        SOURCE_ROW: '',
+        SOURCE_ROW_HASH: sourceHash,
+        MATCH_STATUS: '',
+        MATCH_CONFIDENCE: '',
+        NOTE: note,
+        CREATED_AT: timestampNow,
+        UPDATED_AT: timestampNow
+      };
+      var output = new Array(headers.length).fill('');
+      Object.keys(rowObject).forEach(function(key) { output[headerIndex[key]] = rowObject[key]; });
+      return output;
+    });
+    if (!rowsToAppend.length || rowsToAppend.length !== freshValidation.studentRecords.length) {
+      throw new Error('Set baris bayaran Native tidak lengkap.');
+    }
+
+    sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, headers.length).setValues(rowsToAppend);
+    sheetWriteCompleted = true;
+    SpreadsheetApp.flush();
+
+    var writtenRows = getPaymentsRowsV2_().rows.filter(function(row) {
+      return (row.PAYMENT_GROUP_ID || '').toString().trim() === paymentGroupId;
+    });
+    var expectedStudents = {};
+    freshValidation.studentRecords.forEach(function(student) {
+      expectedStudents[student.studentKey] = normalizeYuranNameV2_(student.nama);
+    });
+    var verifiedStudentIds = {};
+    var verificationPassed = writtenRows.length === freshValidation.studentRecords.length;
+    writtenRows.forEach(function(row) {
+      var rowStudentId = (row.STUDENT_ID || '').toString().trim();
+      var rowName = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+      verifiedStudentIds[rowStudentId] = true;
+      var rowNote = parseNativeEbayarNoteV2_(row.NOTE);
+      var rowAmount = parseEbayarAmountV2_(row.AMOUNT_TOTAL || row.JUMLAH);
+      if (!expectedStudents[rowStudentId] || expectedStudents[rowStudentId] !== rowName ||
+          row.BULAN_KEY !== freshValidation.bulanKey ||
+          rowAmount !== freshValidation.jumlahKeseluruhan || !rowNote ||
+          (row.STATUS || '').toString().trim().toUpperCase() !== 'SELESAI' ||
+          (row.KAEDAH || '').toString().trim().toUpperCase() !== 'NATIVE_EBAYAR' ||
+          (row.SOURCE_SHEET || '').toString().trim().toUpperCase() !== 'NATIVE_EBAYAR' ||
+          (row.SOURCE_ROW_HASH || '').toString().trim() !== sourceHash ||
+          rowNote.paymentDate !== freshValidation.tarikhBayaran ||
+          rowNote.transactionReference !== (freshValidation.noRujukan || '') ||
+          rowNote.slipFileId !== uploadedFile.getId() || rowNote.slipUrl !== uploadedFile.getUrl()) {
+        verificationPassed = false;
+      }
+    });
+    if (Object.keys(expectedStudents).some(function(studentKey) { return !verifiedStudentIds[studentKey]; })) verificationPassed = false;
+    if (!verificationPassed) {
+      return failure('Write mungkin telah berlaku tetapi verifikasi selepas write gagal. Jangan cuba semula sehingga rekod disemak.', {
+        mode: 'NATIVE_EBAYAR_POST_WRITE_VERIFICATION_FAILED',
+        paymentGroupId: paymentGroupId
+      });
+    }
+
+    return {
+      success: true,
+      mode: 'NATIVE_EBAYAR_SUBMISSION_COMPLETED',
+      paymentGroupId: paymentGroupId,
+      students: freshValidation.students,
+      bulanKey: freshValidation.bulanKey,
+      bulanLabel: freshValidation.bulanLabel,
+      tarikhBayaran: freshValidation.tarikhBayaran,
+      jumlahKeseluruhan: freshValidation.jumlahKeseluruhan,
+      slipReceived: true,
+      message: 'Bayaran berjaya dihantar.'
+    };
+  } catch (err) {
+    Logger.log('submitNativeEbayarPayment error: ' + err.message);
+    if (sheetWriteCompleted) {
+      return failure('Write mungkin telah berlaku tetapi verifikasi selepas write gagal. Jangan cuba semula sehingga rekod disemak.', {
+        mode: 'NATIVE_EBAYAR_POST_WRITE_VERIFICATION_FAILED'
+      });
+    }
+    var cleanupFailed = false;
+    if (uploadedFile && !sheetWriteCompleted) {
+      try { uploadedFile.setTrashed(true); } catch (cleanupErr) { cleanupFailed = true; }
+    }
+    return failure(
+      cleanupFailed
+        ? 'Rekod bayaran tidak ditulis tetapi fail slip gagal dibersihkan. Hubungi pentadbir dan jangan cuba semula dahulu.'
+        : 'Bayaran gagal dihantar. Tiada rekod bayaran ditulis.',
+      cleanupFailed ? { mode: 'NATIVE_EBAYAR_UPLOAD_CLEANUP_NEEDED' } : null
+    );
+  } finally {
+    if (lock) {
+      try { lock.releaseLock(); } catch (releaseErr) {}
+    }
+  }
 }
 
 function getMonthMetaV2_(bulanKey) {
