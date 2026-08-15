@@ -317,9 +317,9 @@ V2 hanya layak menggantikan V1 apabila:
 
 ---
 
-## 11. Milestone eBayar V2 Shadow Data Jan–Jul 2026 — COMPLETE
+## 11. Milestone eBayar V2 Shadow Data Jan–Aug 2026 — COMPLETE
 
-Migration dan validation shadow data eBayar V2 bagi Januari hingga Julai 2026 telah selesai. Milestone ini tidak bermaksud production frontend/web app telah cut over kepada V2.
+Migration dan validation shadow data eBayar V2 bagi Januari hingga Ogos 2026 telah selesai. Januari hingga Julai telah disahkan terlebih dahulu, kemudian Ogos dimigrasi dan direconcile. Milestone ini tidak bermaksud production frontend/web app telah cut over kepada V2.
 
 ### Pembetulan reader dan reconciliation Januari–Jun 2026
 
@@ -367,6 +367,45 @@ Catch-up dilaksanakan melalui guarded importer dengan perlindungan berikut:
 - June: 172 paid, RM5,780.
 - July: 114 paid, 69 unpaid, 183 total students, RM3,730.
 - Semua metrik matched exactly; `onlyLegacy: []`, `onlyV2: []`, dan semua diffs ialah zero.
+
+### August 2026 migration dan validation
+
+- Source sheet: `OGOS2026`.
+- 46 source groups menghasilkan 69 child payment rows.
+- 68 unique paid names dengan jumlah RM2,520.
+- Batch 1, source rows 2–26: 25 groups, 37 child rows, RM1,400.
+- Batch 2, source rows 27–47: 21 groups, 32 child rows, RM1,120.
+
+Final staging verification Ogos 2026:
+
+- `sourceGroupsScanned`: 46.
+- `existingUnchangedGroups`: 46.
+- `changedExistingGroups`: 0.
+- `genuinelyNewGroups`: 0.
+- `projectedChildRows`: 0.
+- `projectedTotalAmount`: RM0.
+- `highestExistingAugustSourceRow`: 47.
+
+Final Legacy vs V2 Ogos 2026:
+
+- `sudahBayar`: 68.
+- `belumBayar`: 117.
+- `totalMurid`: 185.
+- `totalKutipan`: RM2,520.
+- Semua diffs ialah zero; `onlyLegacy: []` dan `onlyV2: []`.
+
+### September 2026
+
+- Source tab `SEPT2026` telah wujud tetapi masih mengandungi header sahaja.
+- Belum ada payment rows untuk `2026-09`.
+- Tiada migration atau import September diperlukan pada masa ini.
+
+### Peralihan ke automation mode
+
+- Shadow migration dan validation eBayar V2 bagi Januari hingga Ogos 2026 ditandakan **COMPLETE**.
+- Projek kini beralih daripada manual migration mode kepada automation mode.
+- Sasaran teknikal seterusnya ialah generic guarded current-month sync engine.
+- Production frontend/web app masih belum cut over kepada V2.
 
 ### Nota operasi
 

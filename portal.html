@@ -907,6 +907,92 @@
     line-height: 1.2;
   }
 
+  .ebayar-v2-maintenance {
+    margin: 30px 0 24px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--white);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .ebayar-v2-maintenance-head {
+    padding: 18px 22px;
+    background: #F7F4EA;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .ebayar-v2-maintenance-head h3 { margin: 0 0 3px; color: var(--green); }
+  .ebayar-v2-maintenance-head p { margin: 0; color: var(--text-muted); font-size: 12px; }
+  .ebayar-v2-status-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #EEF1F4;
+    color: var(--text-mid);
+  }
+  .ebayar-v2-status-badge.synced { background: #E8F5E9; color: #2E7D32; }
+  .ebayar-v2-status-badge.new-payments { background: #FFF8DC; color: #8A6500; }
+  .ebayar-v2-status-badge.review-required { background: #FDECEA; color: var(--error); }
+  .ebayar-v2-status-badge.no-payments { background: #EEF1F4; color: var(--text-mid); }
+  .ebayar-v2-maintenance-body { padding: 20px 22px 22px; }
+  .ebayar-v2-maintenance-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .ebayar-v2-maintenance-card {
+    border: 1px solid var(--border);
+    background: var(--cream);
+    border-radius: 10px;
+    padding: 13px 14px;
+    min-width: 0;
+  }
+  .ebayar-v2-maintenance-card span {
+    display: block;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .45px;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+  }
+  .ebayar-v2-maintenance-card strong {
+    display: block;
+    color: var(--text-dark);
+    font-size: 18px;
+    overflow-wrap: anywhere;
+  }
+  .ebayar-v2-maintenance-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .ebayar-v2-maintenance-result {
+    display: none;
+    margin-top: 14px;
+    padding: 11px 13px;
+    border-radius: 8px;
+    background: #EAF4FB;
+    color: #1A4D69;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  @media (max-width: 780px) {
+    .ebayar-v2-maintenance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 460px) {
+    .ebayar-v2-maintenance-grid { grid-template-columns: 1fr; }
+    .ebayar-v2-maintenance-actions .btn { width: 100%; }
+  }
+
   /* === YURAN 2-COLUMN GRID === */
   .yuran-senarai-grid {
     display: grid;
@@ -3287,6 +3373,36 @@
 
   </div>
 
+  <!-- ADMIN ONLY: eBayar V2 read-only maintenance -->
+  <div class="ebayar-v2-maintenance" id="ebayarV2Maintenance" style="display:none;">
+    <div class="ebayar-v2-maintenance-head">
+      <div>
+        <h3>eBayar V2 Maintenance</h3>
+        <p id="ebayarV2LastChecked">Status shadow data bulan semasa</p>
+      </div>
+      <span class="ebayar-v2-status-badge" id="ebayarV2StatusBadge">Memuatkan...</span>
+    </div>
+    <div class="ebayar-v2-maintenance-body">
+      <div class="ebayar-v2-maintenance-grid">
+        <div class="ebayar-v2-maintenance-card"><span>Bulan Semasa</span><strong id="ebayarV2Month">—</strong></div>
+        <div class="ebayar-v2-maintenance-card"><span>Source Groups</span><strong id="ebayarV2SourceGroups">—</strong></div>
+        <div class="ebayar-v2-maintenance-card"><span>Existing</span><strong id="ebayarV2ExistingGroups">—</strong></div>
+        <div class="ebayar-v2-maintenance-card"><span>Baru</span><strong id="ebayarV2NewGroups">—</strong></div>
+        <div class="ebayar-v2-maintenance-card"><span>Perlu Semakan</span><strong id="ebayarV2ChangedGroups">—</strong></div>
+        <div class="ebayar-v2-maintenance-card"><span>Child Rows Baru</span><strong id="ebayarV2ChildRows">—</strong></div>
+        <div class="ebayar-v2-maintenance-card"><span>Jumlah Baru</span><strong id="ebayarV2Amount">—</strong></div>
+        <div class="ebayar-v2-maintenance-card"><span>Legacy vs V2</span><strong id="ebayarV2LegacyMatch">Belum disemak</strong></div>
+      </div>
+      <div class="ebayar-v2-maintenance-actions">
+        <button class="btn btn-ghost btn-sm" id="ebayarV2RefreshBtn" onclick="loadEbayarV2MaintenanceStatus(true)">↻ Refresh Status</button>
+        <button class="btn btn-ghost btn-sm" id="ebayarV2PreviewBtn" onclick="previewCurrentMonthEbayarPanel()">🔎 Preview Current Month</button>
+        <button class="btn btn-ghost btn-sm" id="ebayarV2VerifyBtn" onclick="verifyCurrentMonthEbayarPanel()">✓ Verify Legacy vs V2</button>
+        <button class="btn btn-ghost btn-sm" disabled aria-disabled="true" title="Write automation belum diaktifkan">Auto Sync — Belum Diaktifkan</button>
+      </div>
+      <div class="ebayar-v2-maintenance-result" id="ebayarV2MaintenanceResult"></div>
+    </div>
+  </div>
+
   <!-- D) REKOD CASH PAYMENT -->
   <div class="card" id="sectionCashPayment" style="display:none;">
     <div class="card-header">
@@ -3613,6 +3729,7 @@
   // Yuran state
   let yuranMuridList    = [];
   let currentBelumBayar = [];
+  let ebayarV2MaintenanceData = null;
 
   // Kehadiran state
   let kehadiranStatsData  = [];
@@ -3745,6 +3862,8 @@
     if (btnSync)     btnSync.style.display     = isAdmin ? '' : 'none';
     const btnSyncMinus = document.getElementById('btnSyncMinusBayar');
     if (btnSyncMinus) btnSyncMinus.style.display = isAdmin ? '' : 'none';
+    const ebayarV2Maintenance = document.getElementById('ebayarV2Maintenance');
+    if (ebayarV2Maintenance) ebayarV2Maintenance.style.display = isAdmin ? '' : 'none';
     const tabRekodGuru = document.getElementById('tabBtnRekodKehadiran');
     if (tabRekodGuru)  tabRekodGuru.style.display = loggedIn ? '' : 'none';
     var bellWrap = document.getElementById('notifBellWrap');
@@ -5101,6 +5220,7 @@
   // =====================
   function loadYuranPanel() {
     waLoadLastSent();
+    if (loggedInGuru && currentRole === 'ADMIN') loadEbayarV2MaintenanceStatus(false);
     if (yuranMuridList.length === 0) {
       callGAS('getMuridList', {},
         function(data) {
@@ -5161,6 +5281,147 @@
         renderBelumBayar(currentBelumBayar);
       }
     );
+  }
+
+  function formatEbayarV2Amount(value) {
+    var amount = parseFloat(value);
+    if (isNaN(amount)) amount = 0;
+    return 'RM ' + amount.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function setEbayarV2MaintenanceButtonLoading(id, loading, loadingText) {
+    var btn = document.getElementById(id);
+    if (!btn) return;
+    if (!btn.dataset.defaultText) btn.dataset.defaultText = btn.textContent;
+    btn.disabled = loading;
+    btn.textContent = loading ? loadingText : btn.dataset.defaultText;
+  }
+
+  function showEbayarV2MaintenanceResult(message, isError) {
+    var result = document.getElementById('ebayarV2MaintenanceResult');
+    if (!result) return;
+    result.textContent = message;
+    result.style.display = 'block';
+    result.style.background = isError ? '#FDECEA' : '#EAF4FB';
+    result.style.color = isError ? 'var(--error)' : '#1A4D69';
+  }
+
+  function renderEbayarV2MaintenanceStatus(data) {
+    ebayarV2MaintenanceData = data;
+    var values = {
+      ebayarV2Month: data.bulanLabel || data.bulanKey || '—',
+      ebayarV2SourceGroups: data.sourceGroups || 0,
+      ebayarV2ExistingGroups: data.existingGroups || 0,
+      ebayarV2NewGroups: data.genuinelyNewGroups || 0,
+      ebayarV2ChangedGroups: data.changedExistingGroups || 0,
+      ebayarV2ChildRows: data.projectedChildRows || 0,
+      ebayarV2Amount: formatEbayarV2Amount(data.projectedTotalAmount),
+      ebayarV2LegacyMatch: 'Belum disemak'
+    };
+    Object.keys(values).forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = values[id];
+    });
+
+    var checked = document.getElementById('ebayarV2LastChecked');
+    if (checked) checked.textContent = 'Source: ' + (data.sourceSheet || '—') + ' · Semakan: ' + (data.lastChecked || '—');
+    var badge = document.getElementById('ebayarV2StatusBadge');
+    if (badge) {
+      badge.textContent = data.statusLabel || '—';
+      badge.className = 'ebayar-v2-status-badge ' + ({
+        SYNCED: 'synced',
+        NEW_PAYMENTS: 'new-payments',
+        REVIEW_REQUIRED: 'review-required',
+        NO_PAYMENTS: 'no-payments'
+      }[data.status] || '');
+    }
+    if ((data.sourceGroups || 0) === 0) {
+      showEbayarV2MaintenanceResult('Belum ada bayaran untuk bulan ini.', false);
+    } else {
+      var result = document.getElementById('ebayarV2MaintenanceResult');
+      if (result) result.style.display = 'none';
+    }
+  }
+
+  async function loadEbayarV2MaintenanceStatus(forceRefresh) {
+    if (!loggedInGuru || currentRole !== 'ADMIN') return;
+    if (!forceRefresh && ebayarV2MaintenanceData) {
+      renderEbayarV2MaintenanceStatus(ebayarV2MaintenanceData);
+      return;
+    }
+    setEbayarV2MaintenanceButtonLoading('ebayarV2RefreshBtn', true, 'Memuatkan...');
+    try {
+      var data = await callGASPromise('getEbayarV2MaintenanceStatus', {});
+      if (!data || !data.success) {
+        showEbayarV2MaintenanceResult((data && data.message) || 'Status eBayar V2 gagal dimuatkan.', true);
+        return;
+      }
+      renderEbayarV2MaintenanceStatus(data);
+    } catch (err) {
+      showEbayarV2MaintenanceResult('Ralat sambungan semasa memuatkan status eBayar V2.', true);
+    } finally {
+      setEbayarV2MaintenanceButtonLoading('ebayarV2RefreshBtn', false, 'Memuatkan...');
+    }
+  }
+
+  async function previewCurrentMonthEbayarPanel() {
+    if (!loggedInGuru || currentRole !== 'ADMIN') return;
+    setEbayarV2MaintenanceButtonLoading('ebayarV2PreviewBtn', true, 'Memuatkan preview...');
+    try {
+      var data = await callGASPromise('previewCurrentMonthEbayarV2', {});
+      if (!data || !data.success) {
+        showEbayarV2MaintenanceResult((data && data.message) || 'Preview bulan semasa gagal.', true);
+        return;
+      }
+      if ((data.sourceGroups || 0) === 0) {
+        showEbayarV2MaintenanceResult('Belum ada bayaran untuk bulan ini.', false);
+        return;
+      }
+      showEbayarV2MaintenanceResult(
+        (data.bulanLabel || data.bulanKey) + ': ' + data.sourceGroups + ' source groups, ' +
+        data.existingGroups + ' existing, ' + data.genuinelyNewGroups + ' baru, ' +
+        data.changedExistingGroups + ' perlu semakan, ' + data.projectedChildRows +
+        ' child rows baru, ' + formatEbayarV2Amount(data.projectedTotalAmount) + '.',
+        data.changedExistingGroups > 0
+      );
+    } catch (err) {
+      showEbayarV2MaintenanceResult('Ralat sambungan semasa menjalankan preview.', true);
+    } finally {
+      setEbayarV2MaintenanceButtonLoading('ebayarV2PreviewBtn', false, 'Memuatkan preview...');
+    }
+  }
+
+  async function verifyCurrentMonthEbayarPanel() {
+    if (!loggedInGuru || currentRole !== 'ADMIN') return;
+    setEbayarV2MaintenanceButtonLoading('ebayarV2VerifyBtn', true, 'Membandingkan...');
+    try {
+      var data = await callGASPromise('verifyCurrentMonthLegacyVsV2', {});
+      if (!data || !data.success) {
+        showEbayarV2MaintenanceResult((data && data.message) || 'Verifikasi Legacy vs V2 gagal.', true);
+        return;
+      }
+      var diff = data.diff || {};
+      var matched = diff.sudahBayar === 0 && diff.belumBayar === 0 && diff.totalMurid === 0 &&
+        Math.abs(parseFloat(diff.totalKutipan) || 0) < 0.001 &&
+        (diff.onlyLegacy || []).length === 0 && (diff.onlyV2 || []).length === 0;
+      var legacyCard = document.getElementById('ebayarV2LegacyMatch');
+      if (legacyCard) legacyCard.textContent = matched ? '✅ Match' : '⚠️ Mismatch';
+      var v2 = data.v2 || {};
+      if ((v2.sudahBayar || 0) === 0 && ebayarV2MaintenanceData && (ebayarV2MaintenanceData.sourceGroups || 0) === 0) {
+        showEbayarV2MaintenanceResult('Belum ada bayaran untuk bulan ini.', false);
+      } else {
+        showEbayarV2MaintenanceResult(
+          (matched ? 'Legacy dan V2 sepadan. ' : 'Perbezaan Legacy dan V2 dikesan. ') +
+          'Paid: ' + (v2.sudahBayar || 0) + ', Unpaid: ' + (v2.belumBayar || 0) +
+          ', Total: ' + (v2.totalMurid || 0) + ', Kutipan: ' + formatEbayarV2Amount(v2.totalKutipan) + '.',
+          !matched
+        );
+      }
+    } catch (err) {
+      showEbayarV2MaintenanceResult('Ralat sambungan semasa verifikasi Legacy vs V2.', true);
+    } finally {
+      setEbayarV2MaintenanceButtonLoading('ebayarV2VerifyBtn', false, 'Membandingkan...');
+    }
   }
 
   function syncMuridToForms() {
