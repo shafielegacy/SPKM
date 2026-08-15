@@ -2093,6 +2093,7 @@ var EBAYAR_MONTHS_V2 = [
 
 var NATIVE_EBAYAR_MVP_MAX_FILE_SIZE_V2 = 3 * 1024 * 1024;
 var NATIVE_EBAYAR_SLIP_FOLDER_PROPERTY_V2_ = 'NATIVE_EBAYAR_SLIP_FOLDER_ID';
+var NATIVE_EBAYAR_RECEIPT_FOLDER_PROPERTY_V2_ = 'NATIVE_EBAYAR_RECEIPT_FOLDER_ID';
 var EBAYAR_PORTAL_MODE_PROPERTY_ = 'EBAYAR_PORTAL_MODE';
 var EBAYAR_PORTAL_MODE_UPDATED_AT_PROPERTY_ = 'EBAYAR_PORTAL_MODE_UPDATED_AT';
 var EBAYAR_PORTAL_MODE_UPDATED_BY_PROPERTY_ = 'EBAYAR_PORTAL_MODE_UPDATED_BY';
@@ -2643,6 +2644,293 @@ function isNativeEbayarFileSignatureValidV2_(bytes, mimeType) {
   return false;
 }
 
+function validateNativeEbayarReceiptGroupV2_(paymentGroupId) {
+  var invalidMode = 'NATIVE_EBAYAR_RECEIPT_GROUP_INVALID';
+  var groupId = (paymentGroupId || '').toString().trim();
+  function invalid(message, extra) {
+    var result = { success: false, mode: invalidMode, message: message };
+    Object.keys(extra || {}).forEach(function(key) { result[key] = extra[key]; });
+    return result;
+  }
+
+  if (!/^NATIVE-\d{6}-\d{14}-[A-F0-9]{10}$/.test(groupId)) {
+    return invalid('Identiti kumpulan bayaran Native tidak sah.');
+  }
+
+  var paymentData = getPaymentsRowsV2_();
+  var rows = (paymentData.rows || []).filter(function(row) {
+    return (row.PAYMENT_GROUP_ID || '').toString().trim() === groupId;
+  });
+  if (rows.length < 1 || rows.length > 5) {
+    return invalid('Kumpulan bayaran mesti mengandungi 1 hingga 5 rekod murid.');
+  }
+
+  var first = rows[0];
+  var bulanKey = normalizeBulanKeyV2_(first.BULAN_KEY, first.TAHUN || first.SOURCE_YEAR, first.BULAN);
+  var amountTotal = parseEbayarAmountV2_(first.AMOUNT_TOTAL || first.JUMLAH);
+  var nativeNoteText = (first.NOTE || '').toString();
+  var nativeNote = parseNativeEbayarNoteV2_(nativeNoteText);
+  var sourceHash = (first.SOURCE_ROW_HASH || '').toString().trim();
+  if (!bulanKey || typeof amountTotal !== 'number' || !isFinite(amountTotal) || amountTotal <= 0 ||
+      !nativeNote || !/^\d{4}-\d{2}-\d{2}$/.test((nativeNote.paymentDate || '').toString()) || !sourceHash) {
+    return invalid('Metadata kumpulan bayaran Native tidak lengkap atau tidak sah.');
+  }
+
+  var studentIds = {};
+  var receiptUrls = {};
+  var nonEmptyReceiptCount = 0;
+  var students = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var rowStudentId = (row.STUDENT_ID || '').toString().trim();
+    var rowStudentName = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+    var rowBulanKey = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN || row.SOURCE_YEAR, row.BULAN);
+    var rowAmount = parseEbayarAmountV2_(row.AMOUNT_TOTAL || row.JUMLAH);
+    var rowReceiptUrl = (row.RESIT_URL || '').toString().trim();
+    if ((row.PAYMENT_GROUP_ID || '').toString().trim() !== groupId ||
+        (row.SOURCE_SHEET || '').toString().trim().toUpperCase() !== 'NATIVE_EBAYAR' ||
+        (row.KAEDAH || '').toString().trim().toUpperCase() !== 'NATIVE_EBAYAR' ||
+        (row.STATUS || '').toString().trim().toUpperCase() !== 'SELESAI' ||
+        rowBulanKey !== bulanKey || rowAmount !== amountTotal ||
+        (row.NOTE || '').toString() !== nativeNoteText ||
+        (row.SOURCE_ROW_HASH || '').toString().trim() !== sourceHash ||
+        !rowStudentName || !/^(KANAK|DEWASA):[A-Za-z0-9._-]{1,40}$/.test(rowStudentId) || studentIds[rowStudentId]) {
+      return invalid('Kumpulan bayaran Native tidak konsisten dan memerlukan semakan.');
+    }
+    studentIds[rowStudentId] = true;
+    students.push({
+      studentId: rowStudentId,
+      nama: rowStudentName,
+      studentType: (row.STUDENT_TYPE || '').toString().trim().toUpperCase()
+    });
+    if (rowReceiptUrl) {
+      nonEmptyReceiptCount++;
+      receiptUrls[rowReceiptUrl] = true;
+    }
+  }
+
+  var receiptUrlList = Object.keys(receiptUrls);
+  if (nonEmptyReceiptCount > 0) {
+    var uniformValidReceipt = nonEmptyReceiptCount === rows.length && receiptUrlList.length === 1 &&
+      /^https:\/\/drive\.google\.com\//i.test(receiptUrlList[0]);
+    if (!uniformValidReceipt) {
+      return {
+        success: false,
+        mode: 'NATIVE_EBAYAR_RECEIPT_REVIEW_REQUIRED',
+        message: 'Pautan resit kumpulan tidak konsisten. Penjanaan automatik dihentikan untuk semakan.'
+      };
+    }
+  }
+
+  return {
+    success: true,
+    mode: receiptUrlList.length ? 'NATIVE_EBAYAR_RECEIPT_ALREADY_EXISTS' : 'NATIVE_EBAYAR_RECEIPT_READY_TO_GENERATE',
+    paymentGroupId: groupId,
+    rows: rows,
+    rowNumbers: rows.map(function(row) { return row._rowNumber; }).sort(function(a, b) { return a - b; }),
+    studentIds: Object.keys(studentIds).sort(),
+    students: students,
+    bulanKey: bulanKey,
+    amountTotal: amountTotal,
+    paymentDate: nativeNote.paymentDate,
+    transactionReference: (nativeNote.transactionReference || '').toString(),
+    nativeNoteText: nativeNoteText,
+    sourceHash: sourceHash,
+    existingReceiptUrl: receiptUrlList.length === 1 ? receiptUrlList[0] : ''
+  };
+}
+
+function sameNativeEbayarReceiptSnapshotV2_(before, after) {
+  if (!before || !after || !before.success || !after.success) return false;
+  return before.paymentGroupId === after.paymentGroupId &&
+    before.rowNumbers.join('|') === after.rowNumbers.join('|') &&
+    before.studentIds.join('|') === after.studentIds.join('|') &&
+    before.bulanKey === after.bulanKey &&
+    before.amountTotal === after.amountTotal &&
+    before.paymentDate === after.paymentDate &&
+    before.transactionReference === after.transactionReference &&
+    before.nativeNoteText === after.nativeNoteText &&
+    before.sourceHash === after.sourceHash;
+}
+
+function populateNativeEbayarReceiptDocumentV2_(doc, group) {
+  var body = doc.getBody();
+  body.clear();
+  var title = body.appendParagraph('SISTEM PENGURUSAN KELAS MENGAJI');
+  title.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  title.editAsText().setBold(true).setFontSize(16);
+  var subtitle = body.appendParagraph('RESIT BAYARAN YURAN');
+  subtitle.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  subtitle.editAsText().setBold(true).setFontSize(14);
+  body.appendParagraph('');
+
+  var monthMeta = getMonthMetaV2_(group.bulanKey);
+  var monthLabel = monthMeta ? monthMeta.label + ' ' + group.bulanKey.slice(0, 4) : group.bulanKey;
+  var issuedAt = Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'dd/MM/yyyy HH:mm:ss');
+  var details = [
+    ['ID Resit / Rujukan', group.paymentGroupId],
+    ['Tarikh Resit Dijana', issuedAt],
+    ['Bulan Bayaran', monthLabel],
+    ['Tarikh Bayaran', group.paymentDate],
+    ['Jumlah Keseluruhan', 'RM ' + Number(group.amountTotal).toFixed(2)],
+    ['No. Rujukan Transaksi', group.transactionReference || '-'],
+    ['Kaedah Bayaran', 'Native eBayar / Online']
+  ];
+  body.appendTable(details);
+  body.appendParagraph('');
+  var studentHeading = body.appendParagraph('Murid');
+  studentHeading.editAsText().setBold(true);
+  group.students.forEach(function(student, index) {
+    var typeSuffix = student.studentType ? ' (' + student.studentType + ')' : '';
+    body.appendListItem((index + 1) + '. ' + student.nama + typeSuffix);
+  });
+  body.appendParagraph('');
+  var statement = body.appendParagraph('Resit ini dijana secara automatik oleh sistem.');
+  statement.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  statement.editAsText().setItalic(true).setFontSize(9);
+}
+
+function generateNativeEbayarReceipt_(paymentGroupId) {
+  var lock = LockService.getScriptLock();
+  var tempDocFile = null;
+  var pdfFile = null;
+  var receiptWriteAttempted = false;
+
+  function fail(mode, message) {
+    return { success: false, mode: mode, paymentGroupId: (paymentGroupId || '').toString().trim(), message: message };
+  }
+
+  if (!lock.tryLock(30000)) {
+    return fail('NATIVE_EBAYAR_RECEIPT_LOCK_FAILED', 'Resit belum dapat dijana kerana sistem sedang sibuk.');
+  }
+
+  try {
+    var group = validateNativeEbayarReceiptGroupV2_(paymentGroupId);
+    if (!group.success) return group;
+    if (group.existingReceiptUrl) {
+      return {
+        success: true,
+        mode: 'NATIVE_EBAYAR_RECEIPT_ALREADY_EXISTS',
+        paymentGroupId: group.paymentGroupId,
+        receiptReady: true,
+        receiptUrl: group.existingReceiptUrl,
+        idempotent: true,
+        message: 'Resit rasmi telah tersedia.'
+      };
+    }
+
+    var receiptFolderId = (PropertiesService.getScriptProperties().getProperty(NATIVE_EBAYAR_RECEIPT_FOLDER_PROPERTY_V2_) || '').toString().trim();
+    if (!receiptFolderId) {
+      return fail('NATIVE_EBAYAR_RECEIPT_CONFIGURATION_BLOCKED', 'Script Property NATIVE_EBAYAR_RECEIPT_FOLDER_ID belum dikonfigurasi.');
+    }
+
+    var receiptFolder;
+    try {
+      receiptFolder = DriveApp.getFolderById(receiptFolderId);
+    } catch (folderErr) {
+      return fail('NATIVE_EBAYAR_RECEIPT_CONFIGURATION_BLOCKED', 'Folder resit Native eBayar tidak dapat diakses.');
+    }
+
+    var safeFileName = sanitizeNativeEbayarFileNameV2_('SPKM_RESIT_' + group.paymentGroupId + '.pdf');
+    var tempDoc = DocumentApp.create('TEMP_' + group.paymentGroupId);
+    tempDocFile = DriveApp.getFileById(tempDoc.getId());
+    populateNativeEbayarReceiptDocumentV2_(tempDoc, group);
+    tempDoc.saveAndClose();
+
+    var pdfBlob = tempDocFile.getAs(MimeType.PDF).setName(safeFileName);
+    pdfFile = receiptFolder.createFile(pdfBlob);
+    pdfFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var receiptUrl = pdfFile.getUrl();
+    try {
+      tempDocFile.setTrashed(true);
+      tempDocFile = null;
+    } catch (tempTrashErr) {
+      Logger.log('Temporary Native receipt Doc cleanup failed; will retry in finally: ' + tempTrashErr.message);
+    }
+
+    var freshGroup = validateNativeEbayarReceiptGroupV2_(paymentGroupId);
+    if (!freshGroup.success) {
+      try { pdfFile.setTrashed(true); } catch (preWriteCleanupErr) {}
+      pdfFile = null;
+      return freshGroup;
+    }
+    if (freshGroup.existingReceiptUrl) {
+      try { pdfFile.setTrashed(true); } catch (duplicateCleanupErr) {}
+      pdfFile = null;
+      return {
+        success: true,
+        mode: 'NATIVE_EBAYAR_RECEIPT_ALREADY_EXISTS',
+        paymentGroupId: freshGroup.paymentGroupId,
+        receiptReady: true,
+        receiptUrl: freshGroup.existingReceiptUrl,
+        idempotent: true,
+        message: 'Resit rasmi telah tersedia.'
+      };
+    }
+    if (!sameNativeEbayarReceiptSnapshotV2_(group, freshGroup)) {
+      try { pdfFile.setTrashed(true); } catch (changedCleanupErr) {}
+      pdfFile = null;
+      return fail('NATIVE_EBAYAR_RECEIPT_GROUP_INVALID', 'Kumpulan bayaran berubah semasa penjanaan resit. Resit tidak dipautkan.');
+    }
+
+    var spreadsheet = getEbayarMasterSpreadsheetForImportV2_();
+    var sheet = spreadsheet.getSheetByName(EBAYAR_PAYMENTS_TAB_V2);
+    if (!sheet) throw new Error('Payments tab tidak dijumpai.');
+    var headerIndex = getPaymentsHeaderIndexV2_(sheet);
+    if (headerIndex.RESIT_URL === undefined || headerIndex.RESIT_URL === null) {
+      throw new Error('Header RESIT_URL tidak dijumpai.');
+    }
+    var minRow = freshGroup.rowNumbers[0];
+    var maxRow = freshGroup.rowNumbers[freshGroup.rowNumbers.length - 1];
+    var receiptRange = sheet.getRange(minRow, headerIndex.RESIT_URL + 1, maxRow - minRow + 1, 1);
+    var receiptValues = receiptRange.getValues();
+    var targetRows = {};
+    freshGroup.rowNumbers.forEach(function(rowNumber) { targetRows[rowNumber] = true; });
+    for (var offset = 0; offset < receiptValues.length; offset++) {
+      if (targetRows[minRow + offset]) receiptValues[offset][0] = receiptUrl;
+    }
+    receiptWriteAttempted = true;
+    receiptRange.setValues(receiptValues);
+    SpreadsheetApp.flush();
+
+    var verifiedGroup = validateNativeEbayarReceiptGroupV2_(paymentGroupId);
+    if (!verifiedGroup.success || verifiedGroup.existingReceiptUrl !== receiptUrl ||
+        !sameNativeEbayarReceiptSnapshotV2_(freshGroup, verifiedGroup)) {
+      return fail(
+        'NATIVE_EBAYAR_RECEIPT_POST_WRITE_VERIFICATION_FAILED',
+        'Bayaran telah direkod tetapi pengesahan resit gagal. Jangan hantar bayaran semula.'
+      );
+    }
+
+    return {
+      success: true,
+      mode: 'NATIVE_EBAYAR_RECEIPT_GENERATED',
+      paymentGroupId: group.paymentGroupId,
+      receiptReady: true,
+      receiptUrl: receiptUrl,
+      idempotent: false,
+      message: 'Resit rasmi telah tersedia.'
+    };
+  } catch (err) {
+    Logger.log('generateNativeEbayarReceipt_ error: ' + err.message);
+    if (receiptWriteAttempted) {
+      return fail(
+        'NATIVE_EBAYAR_RECEIPT_POST_WRITE_VERIFICATION_FAILED',
+        'Bayaran telah direkod tetapi pengesahan resit gagal. Jangan hantar bayaran semula.'
+      );
+    }
+    if (pdfFile) {
+      try { pdfFile.setTrashed(true); } catch (pdfCleanupErr) { Logger.log('Native receipt PDF cleanup failed: ' + pdfCleanupErr.message); }
+    }
+    return fail('NATIVE_EBAYAR_RECEIPT_GENERATION_FAILED', 'Bayaran telah direkod tetapi resit rasmi belum dapat dijana.');
+  } finally {
+    if (tempDocFile) {
+      try { tempDocFile.setTrashed(true); } catch (tempCleanupErr) { Logger.log('Temporary Native receipt Doc cleanup failed: ' + tempCleanupErr.message); }
+    }
+    try { lock.releaseLock(); } catch (releaseErr) {}
+  }
+}
+
 function submitNativeEbayarPayment(params) {
   params = params || {};
   var mode = 'NATIVE_EBAYAR_SUBMISSION';
@@ -2840,6 +3128,21 @@ function submitNativeEbayarPayment(params) {
       });
     }
 
+    try { lock.releaseLock(); } catch (paymentLockReleaseErr) {}
+    lock = null;
+
+    var receiptResult;
+    try {
+      receiptResult = generateNativeEbayarReceipt_(paymentGroupId);
+    } catch (receiptErr) {
+      Logger.log('Native receipt integration error: ' + receiptErr.message);
+      receiptResult = {
+        success: false,
+        mode: 'NATIVE_EBAYAR_RECEIPT_GENERATION_FAILED',
+        message: 'Bayaran telah direkod tetapi resit rasmi belum dapat dijana.'
+      };
+    }
+    var receiptReady = receiptResult && receiptResult.success === true && receiptResult.receiptReady === true;
     return {
       success: true,
       mode: 'NATIVE_EBAYAR_SUBMISSION_COMPLETED',
@@ -2850,7 +3153,13 @@ function submitNativeEbayarPayment(params) {
       tarikhBayaran: freshValidation.tarikhBayaran,
       jumlahKeseluruhan: freshValidation.jumlahKeseluruhan,
       slipReceived: true,
-      message: 'Bayaran berjaya dihantar.'
+      receiptReady: receiptReady,
+      receiptUrl: receiptReady ? receiptResult.receiptUrl : '',
+      receiptMode: receiptResult ? receiptResult.mode : 'NATIVE_EBAYAR_RECEIPT_GENERATION_FAILED',
+      receiptMessage: receiptReady ? '' : ((receiptResult && receiptResult.message) || 'Resit rasmi belum tersedia.'),
+      message: receiptReady
+        ? 'Bayaran berjaya dihantar dan resit telah dijana.'
+        : 'Bayaran berjaya dihantar. Resit rasmi belum tersedia.'
     };
   } catch (err) {
     Logger.log('submitNativeEbayarPayment error: ' + err.message);

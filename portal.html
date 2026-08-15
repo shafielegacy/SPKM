@@ -3843,7 +3843,8 @@
         <p><strong>Bulan:</strong> <span id="nativeEbayarSuccessMonth">—</span></p>
         <p><strong>Jumlah:</strong> <span id="nativeEbayarSuccessAmount">—</span></p>
         <p>✓ Slip telah diterima.</p>
-        <p><strong>Resit rasmi akan disediakan oleh sistem.</strong></p>
+        <p id="nativeEbayarReceiptStatus"><strong>Resit rasmi belum tersedia.</strong></p>
+        <a class="btn btn-primary" id="nativeEbayarReceiptLink" href="#" target="_blank" rel="noopener noreferrer" style="display:none; margin-top:10px;">Lihat / Muat Turun Resit</a>
       </div>
     </div>
   </section>
@@ -7385,12 +7386,33 @@
         var element = document.getElementById(id);
         if (element) element.textContent = values[id];
       });
+      var receiptStatus = document.getElementById('nativeEbayarReceiptStatus');
+      var receiptLink = document.getElementById('nativeEbayarReceiptLink');
+      var receiptUrl = (result.receiptUrl || '').toString().trim();
+      var receiptReady = result.receiptReady === true && /^https:\/\//i.test(receiptUrl);
+      if (receiptStatus) {
+        receiptStatus.textContent = receiptReady
+          ? 'Resit rasmi telah tersedia.'
+          : 'Bayaran berjaya direkod. Resit rasmi belum tersedia.';
+        if (!receiptReady && result.receiptMode === 'NATIVE_EBAYAR_RECEIPT_POST_WRITE_VERIFICATION_FAILED') {
+          receiptStatus.textContent += ' Bayaran telah direkod tetapi pengesahan resit gagal. Jangan hantar bayaran semula.';
+        }
+      }
+      if (receiptLink) {
+        if (receiptReady) {
+          receiptLink.href = receiptUrl;
+          receiptLink.style.display = 'inline-flex';
+        } else {
+          receiptLink.removeAttribute('href');
+          receiptLink.style.display = 'none';
+        }
+      }
       var success = document.getElementById('nativeEbayarSuccess');
       if (success) {
         success.classList.add('show');
         success.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
-      showNativeEbayarMessage('Bayaran berjaya dihantar.', false);
+      showNativeEbayarMessage(result.message || 'Bayaran berjaya dihantar.', false);
       nativeEbayarSelectedStudents = [];
       nativeEbayarSelectedFile = null;
       var form = document.getElementById('nativeEbayarForm');
