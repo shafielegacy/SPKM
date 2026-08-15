@@ -985,12 +985,71 @@
     font-size: 12px;
     line-height: 1.55;
   }
+  .ebayar-v2-sync-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(0,0,0,.58);
+  }
+  .ebayar-v2-sync-modal.show { display: flex; }
+  .ebayar-v2-sync-modal-box {
+    width: 100%;
+    max-width: 460px;
+    overflow: hidden;
+    border-radius: 16px;
+    background: var(--white);
+    box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    animation: slideUp .22s ease;
+  }
+  .ebayar-v2-sync-modal-head {
+    padding: 18px 22px 15px;
+    color: var(--white);
+    background: var(--green);
+    border-bottom: 3px solid var(--gold);
+  }
+  .ebayar-v2-sync-modal-head h3 { margin: 0 0 3px; color: var(--white); font-size: 17px; }
+  .ebayar-v2-sync-modal-head p { margin: 0; color: rgba(255,255,255,.72); font-size: 11px; }
+  .ebayar-v2-sync-modal-body { padding: 22px; }
+  .ebayar-v2-sync-summary {
+    margin-bottom: 16px;
+    padding: 8px 15px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--cream);
+  }
+  .ebayar-v2-sync-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 8px 0;
+    font-size: 13px;
+  }
+  .ebayar-v2-sync-row + .ebayar-v2-sync-row { border-top: 1px solid var(--border); }
+  .ebayar-v2-sync-row span { color: var(--text-muted); }
+  .ebayar-v2-sync-row strong { color: var(--text-dark); text-align: right; overflow-wrap: anywhere; }
+  .ebayar-v2-sync-warning {
+    margin-bottom: 18px;
+    padding: 11px 13px;
+    border: 1px solid #E8C56B;
+    border-radius: 8px;
+    background: #FFF8DC;
+    color: #6E5200;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .ebayar-v2-sync-modal-actions { display: flex; gap: 10px; }
+  .ebayar-v2-sync-modal-actions .btn { flex: 1; }
   @media (max-width: 780px) {
     .ebayar-v2-maintenance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 460px) {
     .ebayar-v2-maintenance-grid { grid-template-columns: 1fr; }
     .ebayar-v2-maintenance-actions .btn { width: 100%; }
+    .ebayar-v2-sync-modal-actions { flex-direction: column-reverse; }
   }
 
   /* === YURAN 2-COLUMN GRID === */
@@ -3397,7 +3456,7 @@
         <button class="btn btn-ghost btn-sm" id="ebayarV2RefreshBtn" onclick="loadEbayarV2MaintenanceStatus(true)">↻ Refresh Status</button>
         <button class="btn btn-ghost btn-sm" id="ebayarV2PreviewBtn" onclick="previewCurrentMonthEbayarPanel()">🔎 Preview Current Month</button>
         <button class="btn btn-ghost btn-sm" id="ebayarV2VerifyBtn" onclick="verifyCurrentMonthEbayarPanel()">✓ Verify Legacy vs V2</button>
-        <button class="btn btn-ghost btn-sm" disabled aria-disabled="true" title="Write automation belum diaktifkan">Auto Sync — Belum Diaktifkan</button>
+        <button class="btn btn-primary btn-sm" id="ebayarV2AutoSyncBtn" onclick="startEbayarV2AutoSync()">Auto Sync</button>
       </div>
       <div class="ebayar-v2-maintenance-result" id="ebayarV2MaintenanceResult"></div>
     </div>
@@ -3730,6 +3789,8 @@
   let yuranMuridList    = [];
   let currentBelumBayar = [];
   let ebayarV2MaintenanceData = null;
+  let ebayarV2SyncPreview = null;
+  let ebayarV2SyncBusy = false;
 
   // Kehadiran state
   let kehadiranStatsData  = [];
@@ -5424,6 +5485,167 @@
     }
   }
 
+  function getEbayarV2SyncErrorMessage(data, fallback) {
+    data = data || {};
+    var message = (data.message || fallback || 'Sync eBayar V2 gagal.').toString();
+    var searchable = (message + ' ' + (data.mode || '')).toUpperCase();
+    if (data.mode === 'V2_CURRENT_MONTH_SYNC_POST_WRITE_VERIFICATION_FAILED') {
+      return 'Write mungkin telah berlaku tetapi verifikasi selepas write gagal. Jangan jalankan sync semula sehingga rekod disemak.';
+    }
+    if ((data.changedExistingGroups || 0) > 0 || searchable.indexOf('CHANGEDEXISTINGGROUPS') !== -1 || searchable.indexOf('REVIEW_REQUIRED') !== -1) {
+      return 'Rekod sedia ada berubah dan memerlukan semakan. Auto Sync tidak dijalankan.';
+    }
+    if (searchable.indexOf('SOURCE_CHANGED_DURING_WRITE_WINDOW') !== -1 || searchable.indexOf('SUMBER BERUBAH') !== -1) {
+      return 'Sumber bayaran berubah semasa proses sync. Tiada batch separa ditambah; sila preview semula.';
+    }
+    if (searchable.indexOf('SCRIPT LOCK') !== -1 || searchable.indexOf('LOCK') !== -1) {
+      return 'Sync sedang digunakan oleh proses lain. Sila tunggu sebentar dan cuba preview semula.';
+    }
+    if (searchable.indexOf('TOKEN') !== -1 || searchable.indexOf('SESI') !== -1 ||
+        searchable.indexOf('ADMIN') !== -1 || searchable.indexOf('AKSES') !== -1) {
+      return 'Sesi Admin tidak sah atau telah tamat. Sila log masuk semula.';
+    }
+    if (Array.isArray(data.conflicts) && data.conflicts.length) {
+      return message + ' ' + data.conflicts.length + ' konflik dikesan.';
+    }
+    return message;
+  }
+
+  function openEbayarV2SyncModal(preview) {
+    ebayarV2SyncPreview = preview;
+    var monthLabel = preview.bulanKey || '—';
+    if (ebayarV2MaintenanceData && ebayarV2MaintenanceData.bulanKey === preview.bulanKey) {
+      monthLabel = ebayarV2MaintenanceData.bulanLabel || monthLabel;
+    }
+    var values = {
+      ebayarV2SyncMonth: monthLabel,
+      ebayarV2SyncSource: preview.sourceSheet || '—',
+      ebayarV2SyncGroups: preview.selectedGroups || 0,
+      ebayarV2SyncChildRows: preview.projectedChildRows || 0,
+      ebayarV2SyncAmount: formatEbayarV2Amount(preview.projectedTotalAmount),
+      ebayarV2SyncRemaining: preview.remainingNewGroups || 0
+    };
+    Object.keys(values).forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = values[id];
+    });
+    var remainingRow = document.getElementById('ebayarV2SyncRemainingRow');
+    if (remainingRow) remainingRow.style.display = (preview.remainingNewGroups || 0) > 0 ? 'flex' : 'none';
+    var modal = document.getElementById('ebayarV2SyncModal');
+    if (modal) {
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function closeEbayarV2SyncModal() {
+    if (ebayarV2SyncBusy) return;
+    var modal = document.getElementById('ebayarV2SyncModal');
+    if (modal) {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    ebayarV2SyncPreview = null;
+  }
+
+  async function startEbayarV2AutoSync() {
+    if (ebayarV2SyncBusy) return;
+    if (!loggedInGuru || currentRole !== 'ADMIN') {
+      showEbayarV2MaintenanceResult('Sesi Admin tidak sah atau telah tamat. Sila log masuk semula.', true);
+      return;
+    }
+    ebayarV2SyncBusy = true;
+    setEbayarV2MaintenanceButtonLoading('ebayarV2AutoSyncBtn', true, 'Menyemak...');
+    try {
+      var preview = await callGASPromise('syncCurrentMonthEbayarV2', { allowWrite: false });
+      if (!preview || !preview.success) {
+        showEbayarV2MaintenanceResult(getEbayarV2SyncErrorMessage(preview, 'Preview Auto Sync gagal.'), true);
+        return;
+      }
+      if (preview.mode === 'V2_CURRENT_MONTH_SYNC_NO_CHANGES') {
+        if (!ebayarV2MaintenanceData || ebayarV2MaintenanceData.bulanKey !== preview.bulanKey) {
+          ebayarV2MaintenanceData = null;
+          await loadEbayarV2MaintenanceStatus(true);
+        }
+        var noPayments = ebayarV2MaintenanceData && (ebayarV2MaintenanceData.sourceGroups || 0) === 0;
+        showEbayarV2MaintenanceResult(
+          noPayments ? 'Belum ada bayaran untuk bulan ini.' : 'Tiada bayaran baru untuk diselaraskan.',
+          false
+        );
+        return;
+      }
+      if ((preview.selectedGroups || 0) < 1) {
+        showEbayarV2MaintenanceResult('Tiada bayaran baru untuk diselaraskan.', false);
+        return;
+      }
+      openEbayarV2SyncModal(preview);
+    } catch (err) {
+      showEbayarV2MaintenanceResult('Ralat sambungan semasa menyediakan preview Auto Sync.', true);
+    } finally {
+      ebayarV2SyncBusy = false;
+      setEbayarV2MaintenanceButtonLoading('ebayarV2AutoSyncBtn', false, 'Menyemak...');
+    }
+  }
+
+  async function confirmEbayarV2AutoSync() {
+    if (ebayarV2SyncBusy || !ebayarV2SyncPreview || (ebayarV2SyncPreview.selectedGroups || 0) < 1) return;
+    if (!loggedInGuru || currentRole !== 'ADMIN') {
+      closeEbayarV2SyncModal();
+      showEbayarV2MaintenanceResult('Sesi Admin tidak sah atau telah tamat. Sila log masuk semula.', true);
+      return;
+    }
+
+    ebayarV2SyncBusy = true;
+    var modal = document.getElementById('ebayarV2SyncModal');
+    if (modal) {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    var continueBtn = document.getElementById('ebayarV2SyncContinueBtn');
+    if (continueBtn) continueBtn.disabled = true;
+    setEbayarV2MaintenanceButtonLoading('ebayarV2AutoSyncBtn', true, 'Sedang Sync...');
+
+    try {
+      var result = await callGASPromise('syncCurrentMonthEbayarV2', { allowWrite: true });
+      if (result && result.mode === 'V2_CURRENT_MONTH_SYNC_POST_WRITE_VERIFICATION_FAILED') {
+        showEbayarV2MaintenanceResult(
+          'Write mungkin telah berlaku tetapi verifikasi selepas write gagal. Jangan jalankan sync semula sehingga rekod disemak.',
+          true
+        );
+        return;
+      }
+      if (!result || result.success !== true) {
+        showEbayarV2MaintenanceResult(getEbayarV2SyncErrorMessage(result, 'Sync gagal.'), true);
+        return;
+      }
+      if (result.mode === 'V2_CURRENT_MONTH_SYNC_NO_CHANGES') {
+        ebayarV2MaintenanceData = null;
+        await loadEbayarV2MaintenanceStatus(true);
+        showEbayarV2MaintenanceResult('Tiada bayaran baru untuk diselaraskan.', false);
+        return;
+      }
+
+      var successMessage = 'Sync berjaya. ' + (result.appendedGroups || 0) + ' payment groups, ' +
+        (result.appendedChildRows || 0) + ' child rows, ' + formatEbayarV2Amount(result.appendedTotalAmount) + ' ditambah.';
+      if (result.morePending === true) {
+        successMessage += ' Masih ada ' + (result.remainingNewGroups || 0) +
+          ' payment groups baharu. Jalankan Auto Sync sekali lagi untuk batch seterusnya.';
+      }
+
+      ebayarV2MaintenanceData = null;
+      await loadEbayarV2MaintenanceStatus(true);
+      await verifyCurrentMonthEbayarPanel();
+      showEbayarV2MaintenanceResult(successMessage, false);
+    } catch (err) {
+      showEbayarV2MaintenanceResult('Ralat sambungan semasa Auto Sync. Jangan cuba semula sehingga status staging disemak.', true);
+    } finally {
+      ebayarV2SyncPreview = null;
+      ebayarV2SyncBusy = false;
+      if (continueBtn) continueBtn.disabled = false;
+      setEbayarV2MaintenanceButtonLoading('ebayarV2AutoSyncBtn', false, 'Sedang Sync...');
+    }
+  }
+
   function syncMuridToForms() {
     const btn = document.getElementById('btnSyncGF');
     const ok  = document.getElementById('syncSuccess');
@@ -6884,6 +7106,31 @@
     <h3 class="idle-modal-title">Sesi Hampir Tamat</h3>
     <p class="idle-modal-msg">Anda tidak aktif. Sesi akan tamat dalam <strong style="color:#E74C3C;">2 minit</strong>.<br>Klik OK untuk teruskan.</p>
     <button class="idle-modal-btn" onclick="extendSession()">OK, Teruskan Sesi</button>
+  </div>
+</div>
+
+<!-- ADMIN EBAYAR V2 AUTO SYNC CONFIRMATION -->
+<div class="ebayar-v2-sync-modal" id="ebayarV2SyncModal" role="dialog" aria-modal="true" aria-labelledby="ebayarV2SyncModalTitle" aria-hidden="true">
+  <div class="ebayar-v2-sync-modal-box">
+    <div class="ebayar-v2-sync-modal-head">
+      <h3 id="ebayarV2SyncModalTitle">Sahkan Auto Sync eBayar V2</h3>
+      <p>Preview batch semasa — tindakan Admin diperlukan</p>
+    </div>
+    <div class="ebayar-v2-sync-modal-body">
+      <div class="ebayar-v2-sync-summary">
+        <div class="ebayar-v2-sync-row"><span>Bulan</span><strong id="ebayarV2SyncMonth">—</strong></div>
+        <div class="ebayar-v2-sync-row"><span>Source sheet</span><strong id="ebayarV2SyncSource">—</strong></div>
+        <div class="ebayar-v2-sync-row"><span>Payment groups</span><strong id="ebayarV2SyncGroups">—</strong></div>
+        <div class="ebayar-v2-sync-row"><span>Projected child rows</span><strong id="ebayarV2SyncChildRows">—</strong></div>
+        <div class="ebayar-v2-sync-row"><span>Projected total</span><strong id="ebayarV2SyncAmount">—</strong></div>
+        <div class="ebayar-v2-sync-row" id="ebayarV2SyncRemainingRow" style="display:none;"><span>Remaining new groups</span><strong id="ebayarV2SyncRemaining">0</strong></div>
+      </div>
+      <div class="ebayar-v2-sync-warning">Sync ini akan menambah rekod baharu ke eBayar V2. Rekod sedia ada tidak akan diubah.</div>
+      <div class="ebayar-v2-sync-modal-actions">
+        <button class="btn btn-ghost" type="button" onclick="closeEbayarV2SyncModal()">Batal</button>
+        <button class="btn btn-primary" type="button" id="ebayarV2SyncContinueBtn" onclick="confirmEbayarV2AutoSync()">Teruskan Sync</button>
+      </div>
+    </div>
   </div>
 </div>
 

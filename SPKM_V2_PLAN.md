@@ -404,8 +404,42 @@ Final Legacy vs V2 Ogos 2026:
 
 - Shadow migration dan validation eBayar V2 bagi Januari hingga Ogos 2026 ditandakan **COMPLETE**.
 - Projek kini beralih daripada manual migration mode kepada automation mode.
-- Sasaran teknikal seterusnya ialah generic guarded current-month sync engine.
+- Generic guarded current-month sync engine v1 telah disiapkan sebagai asas sync bulan semasa.
 - Production frontend/web app masih belum cut over kepada V2.
+
+### Generic Guarded Current-Month Sync Engine v1
+
+Backend disiapkan dan berjaya melalui preview test pada 15 Ogos 2026.
+
+Perlindungan dan tingkah laku yang telah disahkan:
+
+- Bulan semasa dan source sheet ditentukan secara runtime.
+- Akses server-side dihadkan kepada `ADMIN`.
+- Mod lalai ialah read-only; write hanya berlaku apabila `allowWrite === true`.
+- Hanya source groups berstatus `GENUINELY_NEW` dipilih.
+- Maksimum 25 payment groups bagi setiap batch execution.
+- Konflik staging diperiksa sebelum script lock melalui `PAYMENT_GROUP_ID`, source location, `SOURCE_ROW_HASH`, dan secondary content fingerprint.
+- `ScriptLock` menggunakan tempoh menunggu maksimum 30 saat.
+- Source draft dibina semula selepas lock dan dibandingkan dengan snapshot pra-lock untuk perlindungan TOCTOU.
+- Final staging recheck dijalankan semasa lock masih dipegang.
+- Keseluruhan batch ditambah melalui satu panggilan `setValues()` sahaja.
+- Tiada partial-write loop dan tiada batch kedua dijalankan secara automatik.
+- Fresh current-month preview, source identity, dan staging identity disemak selepas write.
+- Jika post-write verification gagal, tiada rollback dan tiada auto-retry dilakukan; rekod mesti disemak secara manual.
+
+Verified August 2026 preview pada 15 Ogos 2026:
+
+- Mode: `V2_CURRENT_MONTH_SYNC_NO_CHANGES`.
+- 46 existing groups.
+- 0 genuinely new groups.
+- 0 changed-existing groups.
+- 0 projected child rows.
+- Projected amount RM0.
+- Tiada write dilakukan.
+
+Admin panel `Auto Sync` kini disambungkan kepada aliran preview-first dan explicit confirmation. Sync kekal admin-initiated sahaja; tiada scheduler, time trigger, auto-retry, atau automatic second batch diwujudkan.
+
+Production frontend cutover kepada V2 masih **BELUM COMPLETE**. Legacy kekal authoritative sehingga formal cutover diluluskan dan dilaksanakan.
 
 ### Nota operasi
 

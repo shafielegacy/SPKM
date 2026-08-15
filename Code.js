@@ -185,6 +185,7 @@ var ALLOWED_ACTIONS = [
   'ensureEbayarMasterSchemaV2', 'listEbayarYears', 'getMonthlyPaymentSummaryV2',
   'getYuranStatsV2', 'getYuranParentV2', 'compareYuranLegacyVsV2',
   'getEbayarV2MaintenanceStatus', 'previewCurrentMonthEbayarV2', 'verifyCurrentMonthLegacyVsV2',
+  'syncCurrentMonthEbayarV2',
   'auditEbayarSourceTabsV2',
   'getMuridByGuruUntukTukar', 'tukarGuruMurid',
   'getMuridTanpaGuru', 'assignGuruMurid'
@@ -200,6 +201,7 @@ var AUTH_REQUIRED_ACTIONS = [
   'ensureEbayarMasterSchemaV2', 'listEbayarYears', 'getMonthlyPaymentSummaryV2',
   'getYuranStatsV2', 'getYuranParentV2', 'compareYuranLegacyVsV2',
   'getEbayarV2MaintenanceStatus', 'previewCurrentMonthEbayarV2', 'verifyCurrentMonthLegacyVsV2',
+  'syncCurrentMonthEbayarV2',
   'auditEbayarSourceTabsV2',
   'getMuridByGuruUntukTukar', 'tukarGuruMurid',
   'getMuridTanpaGuru', 'assignGuruMurid'
@@ -285,6 +287,7 @@ function doPost(e) {
     else if (action === 'getEbayarV2MaintenanceStatus') result = getEbayarV2MaintenanceStatus(body);
     else if (action === 'previewCurrentMonthEbayarV2')  result = previewCurrentMonthEbayarV2(body);
     else if (action === 'verifyCurrentMonthLegacyVsV2') result = verifyCurrentMonthLegacyVsV2(body);
+    else if (action === 'syncCurrentMonthEbayarV2')      result = syncCurrentMonthEbayarV2(body);
     else if (action === 'auditEbayarSourceTabsV2')     result = auditEbayarSourceTabsV2(body);
     else if (action === 'getMuridByGuruUntukTukar')    result = getMuridByGuruUntukTukar(body);
     else if (action === 'tukarGuruMurid')              result = tukarGuruMurid(body);
@@ -431,6 +434,7 @@ function doAction(action, payload) {
   else if (action === 'getEbayarV2MaintenanceStatus') return getEbayarV2MaintenanceStatus(payload);
   else if (action === 'previewCurrentMonthEbayarV2')  return previewCurrentMonthEbayarV2(payload);
   else if (action === 'verifyCurrentMonthLegacyVsV2') return verifyCurrentMonthLegacyVsV2(payload);
+  else if (action === 'syncCurrentMonthEbayarV2')     return syncCurrentMonthEbayarV2(payload);
   else if (action === 'auditEbayarSourceTabsV2')      return auditEbayarSourceTabsV2(payload);
   else if (action === 'getMuridByGuruUntukTukar')     return getMuridByGuruUntukTukar(payload);
   else if (action === 'tukarGuruMurid')               return tukarGuruMurid(payload);
@@ -5474,6 +5478,649 @@ function verifyCurrentMonthLegacyVsV2(params) {
     bulan: meta.sourceSheet,
     bulanKey: meta.bulanKey
   });
+}
+
+function getCurrentMonthSyncKeysV2_(map) {
+  return Object.keys(map || {}).sort();
+}
+
+function buildCurrentMonthSyncGroupsV2_(meta, selectedGroupIds) {
+  var draft = buildEbayarImportRowsDryRunV2_({ sourceYear: meta.tahun, includeDraftRows: true });
+  if (!draft || draft.success !== true) {
+    return {
+      success: false,
+      message: draft && draft.message ? draft.message : 'Draft bulan semasa gagal dibina.'
+    };
+  }
+
+  var selectedSet = null;
+  if (Array.isArray(selectedGroupIds)) {
+    selectedSet = {};
+    selectedGroupIds.forEach(function(groupId) { selectedSet[groupId] = true; });
+  }
+
+  var groups = {};
+  (draft.draftRows || []).forEach(function(row) {
+    var sourceYear = parseInt(row.SOURCE_YEAR, 10);
+    var sourceSheet = (row.SOURCE_SHEET || '').toString().trim().toUpperCase();
+    var bulanKey = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN, row.BULAN || row.SOURCE_SHEET);
+    if (sourceYear !== meta.tahun || sourceSheet !== meta.sourceSheet || bulanKey !== meta.bulanKey) return;
+
+    var paymentGroupId = makeImportPaymentGroupIdV2_(row);
+    if (selectedSet && !selectedSet[paymentGroupId]) return;
+    if (!groups[paymentGroupId]) {
+      groups[paymentGroupId] = {
+        paymentGroupId: paymentGroupId,
+        rows: [],
+        sourceYears: {},
+        sourceSheets: {},
+        sourceRows: {},
+        hashes: {},
+        locations: {},
+        fingerprints: {},
+        amounts: {},
+        invalidAmounts: {},
+        statuses: {},
+        normalizedNames: {},
+        paidNames: {}
+      };
+    }
+
+    var group = groups[paymentGroupId];
+    var sourceRow = parseInt(row.SOURCE_ROW, 10);
+    var sourceRowText = isNaN(sourceRow) ? (row.SOURCE_ROW || '').toString().trim() : sourceRow.toString();
+    var sourceSheetRaw = (row.SOURCE_SHEET || '').toString().trim();
+    var location = makeEbayarSourceLocationKeyV2_(sourceYear, sourceSheetRaw, sourceRowText);
+    var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+    var fingerprint = makeEbayarSourceContentFingerprintV2_(row);
+    var rawAmount = row.AMOUNT_TOTAL;
+    if (rawAmount === null || rawAmount === undefined || rawAmount === '') rawAmount = row.JUMLAH;
+    var amount = parseEbayarAmountV2_(rawAmount);
+    var status = (row.STATUS || '').toString().trim().toUpperCase();
+    var name = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+
+    group.rows.push(row);
+    group.sourceYears[sourceYear.toString()] = true;
+    group.sourceSheets[sourceSheetRaw] = true;
+    group.sourceRows[sourceRowText] = true;
+    if (hash) group.hashes[hash] = true;
+    if (location) group.locations[location] = true;
+    if (fingerprint) group.fingerprints[fingerprint] = true;
+    if (typeof amount === 'number' && isFinite(amount) && amount >= 0) {
+      group.amounts[amount.toFixed(2)] = true;
+    } else {
+      group.invalidAmounts[(rawAmount === null || rawAmount === undefined) ? '' : rawAmount.toString()] = true;
+    }
+    group.statuses[status || '(blank)'] = true;
+    if (name) group.normalizedNames[name] = true;
+    if ((!status || status === 'SELESAI') && name) group.paidNames[name] = true;
+  });
+
+  return { success: true, groups: groups };
+}
+
+function validateCurrentMonthSyncGroupV2_(meta, group, previewCandidate) {
+  var keys = getCurrentMonthSyncKeysV2_;
+  var errors = [];
+  if (!group) return ['CURRENT_MONTH_DRAFT_GROUP_MISSING'];
+
+  var escapedSheet = meta.sourceSheet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  var idMatch = (group.paymentGroupId || '').match(new RegExp('^PG-' + meta.tahun + '-' + escapedSheet + '-(\\d+)$'));
+  var sourceYears = keys(group.sourceYears);
+  var sourceSheets = keys(group.sourceSheets);
+  var sourceRows = keys(group.sourceRows);
+  var hashes = keys(group.hashes);
+  var locations = keys(group.locations);
+  var fingerprints = keys(group.fingerprints);
+  var amounts = keys(group.amounts);
+  var invalidAmounts = keys(group.invalidAmounts);
+  var numericSourceRow = sourceRows.length === 1 ? parseInt(sourceRows[0], 10) : NaN;
+
+  if (!idMatch || isNaN(numericSourceRow) || numericSourceRow < 2 || parseInt(idMatch[1], 10) !== numericSourceRow) {
+    errors.push('INVALID_PAYMENT_GROUP_ID');
+  }
+  if (sourceYears.length !== 1 || parseInt(sourceYears[0], 10) !== meta.tahun) errors.push('INVALID_SOURCE_YEAR');
+  if (sourceSheets.length !== 1 || sourceSheets[0].toUpperCase() !== meta.sourceSheet) errors.push('INVALID_SOURCE_SHEET');
+  if (sourceRows.length !== 1) errors.push('MULTIPLE_SOURCE_ROWS');
+  if (hashes.length !== 1) errors.push('INVALID_SOURCE_ROW_HASH_COUNT');
+  if (locations.length !== 1) errors.push('INVALID_SOURCE_LOCATION_COUNT');
+  if (fingerprints.length !== 1) errors.push('INVALID_CONTENT_FINGERPRINT_COUNT');
+  if (amounts.length !== 1 || invalidAmounts.length) errors.push('INVALID_AMOUNT');
+  if (!group.rows.length) errors.push('NO_CHILD_ROWS');
+
+  if (previewCandidate) {
+    var candidateFingerprints = (previewCandidate.contentFingerprints || []).slice().sort();
+    if (!candidateFingerprints.length && previewCandidate.contentFingerprint) {
+      candidateFingerprints = [previewCandidate.contentFingerprint.toString()];
+    }
+    if ((previewCandidate.paymentGroupId || '').toString() !== group.paymentGroupId) errors.push('PREVIEW_PAYMENT_GROUP_ID_MISMATCH');
+    if (parseInt(previewCandidate.sourceYear, 10) !== meta.tahun) errors.push('PREVIEW_SOURCE_YEAR_MISMATCH');
+    if ((previewCandidate.sourceSheet || '').toString().trim().toUpperCase() !== meta.sourceSheet) errors.push('PREVIEW_SOURCE_SHEET_MISMATCH');
+    if (parseInt(previewCandidate.sourceRow, 10) !== numericSourceRow) errors.push('PREVIEW_SOURCE_ROW_MISMATCH');
+    if ((previewCandidate.sourceRowHash || '').toString().trim() !== (hashes[0] || '')) errors.push('PREVIEW_SOURCE_ROW_HASH_MISMATCH');
+    if ((previewCandidate.sourceLocation || '').toString() !== (locations[0] || '')) errors.push('PREVIEW_SOURCE_LOCATION_MISMATCH');
+    if (JSON.stringify(candidateFingerprints) !== JSON.stringify(fingerprints)) errors.push('PREVIEW_CONTENT_FINGERPRINT_MISMATCH');
+    if (parseInt(previewCandidate.childRows, 10) !== group.rows.length) errors.push('PREVIEW_CHILD_ROW_COUNT_MISMATCH');
+    if (amounts.length === 1) {
+      var previewAmount = parseEbayarAmountV2_(previewCandidate.amountTotal);
+      if (typeof previewAmount !== 'number' || !isFinite(previewAmount) || previewAmount.toFixed(2) !== amounts[0]) {
+        errors.push('PREVIEW_AMOUNT_MISMATCH');
+      }
+    }
+    if (JSON.stringify((previewCandidate.statuses || []).slice().sort()) !== JSON.stringify(keys(group.statuses))) {
+      errors.push('PREVIEW_STATUS_SET_MISMATCH');
+    }
+    if (JSON.stringify((previewCandidate.normalizedNames || []).slice().sort()) !== JSON.stringify(keys(group.normalizedNames))) {
+      errors.push('PREVIEW_NORMALIZED_NAME_SET_MISMATCH');
+    }
+    if (previewCandidate.classification !== 'GENUINELY_NEW') errors.push('PREVIEW_CLASSIFICATION_MISMATCH');
+  }
+
+  return errors;
+}
+
+function makeCurrentMonthSyncSnapshotV2_(group) {
+  function frozenKeys(map) { return Object.freeze(getCurrentMonthSyncKeysV2_(map)); }
+  var sourceYears = frozenKeys(group.sourceYears);
+  var sourceSheets = frozenKeys(group.sourceSheets);
+  var sourceRows = frozenKeys(group.sourceRows);
+  var amounts = frozenKeys(group.amounts);
+  return Object.freeze({
+    paymentGroupId: group.paymentGroupId,
+    sourceYear: parseInt(sourceYears[0], 10),
+    sourceSheet: sourceSheets[0],
+    sourceRow: parseInt(sourceRows[0], 10),
+    sourceRowHash: frozenKeys(group.hashes)[0],
+    sourceLocation: frozenKeys(group.locations)[0],
+    contentFingerprint: frozenKeys(group.fingerprints)[0],
+    childRows: group.rows.length,
+    normalizedNames: frozenKeys(group.normalizedNames),
+    paidNames: frozenKeys(group.paidNames),
+    statuses: frozenKeys(group.statuses),
+    amountTotal: parseFloat(amounts[0])
+  });
+}
+
+function compareCurrentMonthSyncSnapshotsV2_(before, fresh) {
+  var differences = [];
+  if (!before || !fresh) return ['GROUP_MISSING'];
+  if (before.paymentGroupId !== fresh.paymentGroupId) differences.push('PAYMENT_GROUP_ID');
+  if (before.sourceYear !== fresh.sourceYear) differences.push('SOURCE_YEAR');
+  if (before.sourceSheet !== fresh.sourceSheet) differences.push('SOURCE_SHEET');
+  if (before.sourceRow !== fresh.sourceRow) differences.push('SOURCE_ROW');
+  if (before.sourceRowHash !== fresh.sourceRowHash) differences.push('SOURCE_ROW_HASH');
+  if (before.sourceLocation !== fresh.sourceLocation) differences.push('SOURCE_LOCATION');
+  if (before.contentFingerprint !== fresh.contentFingerprint) differences.push('SECONDARY_CONTENT_FINGERPRINT');
+  if (before.childRows !== fresh.childRows) differences.push('CHILD_ROW_COUNT');
+  if (JSON.stringify(before.normalizedNames) !== JSON.stringify(fresh.normalizedNames)) differences.push('NORMALIZED_NAME_SET');
+  if (JSON.stringify(before.paidNames) !== JSON.stringify(fresh.paidNames)) differences.push('PAID_NAME_SET');
+  if (JSON.stringify(before.statuses) !== JSON.stringify(fresh.statuses)) differences.push('STATUS_SET');
+  if (before.amountTotal.toFixed(2) !== fresh.amountTotal.toFixed(2)) differences.push('AMOUNT_TOTAL');
+  return differences;
+}
+
+function findCurrentMonthSyncStagingConflictsV2_(snapshots) {
+  var staging = getPaymentsRowsV2_();
+  var existingGroupIds = {};
+  var existingLocations = {};
+  var existingHashes = {};
+  var existingFingerprints = {};
+
+  (staging.rows || []).forEach(function(row) {
+    var rawGroupId = (row.PAYMENT_GROUP_ID || '').toString().trim();
+    var groupId = rawGroupId ? makeImportPaymentGroupIdV2_({ PAYMENT_GROUP_ID: rawGroupId }) : '';
+    var sourceYear = (row.SOURCE_YEAR || '').toString().trim();
+    var sourceSheet = (row.SOURCE_SHEET || '').toString().trim();
+    var sourceRow = (row.SOURCE_ROW || '').toString().trim();
+    var location = makeEbayarSourceLocationKeyV2_(sourceYear, sourceSheet, sourceRow);
+    var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+    var fingerprint = makeEbayarSourceContentFingerprintV2_(row);
+    if (groupId) existingGroupIds[groupId] = true;
+    if (sourceYear && sourceSheet && sourceRow) existingLocations[location] = true;
+    if (hash) existingHashes[hash] = true;
+    if (fingerprint) existingFingerprints[fingerprint] = true;
+  });
+
+  var conflicts = [];
+  (snapshots || []).forEach(function(snapshot) {
+    var matchingKeys = [];
+    if (existingGroupIds[snapshot.paymentGroupId]) matchingKeys.push('PAYMENT_GROUP_ID');
+    if (existingLocations[snapshot.sourceLocation]) matchingKeys.push('SOURCE_LOCATION');
+    if (existingHashes[snapshot.sourceRowHash]) matchingKeys.push('SOURCE_ROW_HASH');
+    if (existingFingerprints[snapshot.contentFingerprint]) matchingKeys.push('SECONDARY_CONTENT_FINGERPRINT');
+    if (matchingKeys.length) {
+      conflicts.push({
+        paymentGroupId: snapshot.paymentGroupId,
+        sourceYear: snapshot.sourceYear,
+        sourceSheet: snapshot.sourceSheet,
+        sourceRow: snapshot.sourceRow,
+        sourceRowHash: snapshot.sourceRowHash,
+        sourceLocation: snapshot.sourceLocation,
+        contentFingerprint: snapshot.contentFingerprint,
+        matchingKeys: matchingKeys
+      });
+    }
+  });
+  return conflicts;
+}
+
+function findAmbiguousCurrentMonthSyncAnomaliesV2_(anomalies, candidates) {
+  var identityTypes = {
+    GROUP_ID_MULTIPLE_STAGED_HASHES: true,
+    DUPLICATE_STAGED_SOURCE_IDENTITY: true,
+    DUPLICATE_SOURCE_IDENTITY: true,
+    SECONDARY_CONTENT_FINGERPRINT_MATCH: true
+  };
+  var groupIds = {};
+  var locations = {};
+  (candidates || []).forEach(function(candidate) {
+    if (candidate.paymentGroupId) groupIds[candidate.paymentGroupId.toString()] = true;
+    if (candidate.sourceLocation) locations[candidate.sourceLocation.toString()] = true;
+  });
+  return (anomalies || []).filter(function(anomaly) {
+    if (!identityTypes[anomaly.type]) return false;
+    var keys = [anomaly.key, anomaly.paymentGroupId, anomaly.sourceLocation];
+    return keys.some(function(key) {
+      var value = (key === null || key === undefined) ? '' : key.toString();
+      return !!(groupIds[value] || locations[value]);
+    });
+  });
+}
+
+function syncCurrentMonthEbayarV2(params) {
+  params = params || {};
+  var admin = authorizeEbayarV2MaintenanceAdmin_(params);
+  if (!admin.valid) return { success: false, message: admin.message };
+  var meta = getCurrentEbayarMonthMetaV2_();
+  if (!meta.success) return meta;
+  return syncCurrentMonthEbayarV2Core_(meta, params.allowWrite === true);
+}
+
+function syncCurrentMonthEbayarV2Core_(meta, allowWrite) {
+  allowWrite = allowWrite === true;
+  var mode = allowWrite ? 'V2_CURRENT_MONTH_SYNC_GUARDED_WRITE' : 'V2_CURRENT_MONTH_SYNC_PREVIEW_READ_ONLY';
+
+  try {
+    var preview = getCurrentMonthPreviewDataV2_(meta);
+    var compactPreview = compactCurrentMonthPreviewV2_(meta, preview);
+    if (!preview || preview.success !== true || !compactPreview.success) {
+      return {
+        success: false,
+        mode: mode,
+        tahun: meta.tahun,
+        bulanKey: meta.bulanKey,
+        sourceSheet: meta.sourceSheet,
+        message: compactPreview.message || 'Preview bulan semasa gagal.'
+      };
+    }
+    if ((preview.changedExistingGroups || 0) > 0) {
+      return {
+        success: false,
+        mode: mode,
+        tahun: meta.tahun,
+        bulanKey: meta.bulanKey,
+        sourceSheet: meta.sourceSheet,
+        message: 'Sync dibatalkan: changedExistingGroups mesti 0.',
+        changedExistingGroups: preview.changedExistingGroups
+      };
+    }
+
+    var candidates = (preview.genuinelyNewCandidates || []).slice().sort(function(a, b) {
+      return parseInt(a.sourceRow, 10) - parseInt(b.sourceRow, 10);
+    });
+    if (!candidates.length) {
+      return {
+        success: true,
+        mode: 'V2_CURRENT_MONTH_SYNC_NO_CHANGES',
+        tahun: meta.tahun,
+        bulanKey: meta.bulanKey,
+        sourceSheet: meta.sourceSheet,
+        selectedGroups: 0,
+        selectedPaymentGroupIds: [],
+        projectedChildRows: 0,
+        projectedTotalAmount: 0,
+        appendedGroups: 0,
+        appendedChildRows: 0,
+        appendedTotalAmount: 0,
+        remainingNewGroups: 0,
+        morePending: false,
+        postWriteExistingGroups: preview.existingUnchangedGroups || 0,
+        postWriteGenuinelyNewGroups: 0,
+        postWriteChangedExistingGroups: 0,
+        postWriteProjectedChildRows: 0,
+        postWriteProjectedTotalAmount: 0
+      };
+    }
+    if (candidates.length !== (preview.genuinelyNewGroups || 0)) {
+      return {
+        success: false,
+        mode: mode,
+        message: 'Sync dibatalkan: senarai genuinely-new tidak lengkap.',
+        genuinelyNewGroups: preview.genuinelyNewGroups,
+        genuinelyNewCandidates: candidates.length
+      };
+    }
+
+    var ambiguousAnomalies = findAmbiguousCurrentMonthSyncAnomaliesV2_(preview.anomalies, candidates);
+    if (ambiguousAnomalies.length) {
+      return {
+        success: false,
+        mode: mode,
+        message: 'Sync dibatalkan: anomaly identiti melibatkan calon baharu.',
+        conflicts: ambiguousAnomalies
+      };
+    }
+
+    var candidateIds = [];
+    var candidateById = {};
+    var duplicateCandidateIds = [];
+    candidates.forEach(function(candidate) {
+      var groupId = (candidate.paymentGroupId || '').toString().trim();
+      if (candidateById[groupId]) duplicateCandidateIds.push(groupId);
+      candidateById[groupId] = candidate;
+      candidateIds.push(groupId);
+    });
+    if (duplicateCandidateIds.length) {
+      return { success: false, mode: mode, message: 'Sync dibatalkan: paymentGroupId calon pendua.', conflicts: duplicateCandidateIds };
+    }
+
+    var preLockBuild = buildCurrentMonthSyncGroupsV2_(meta, candidateIds);
+    if (!preLockBuild.success) return { success: false, mode: mode, message: preLockBuild.message };
+    var validationConflicts = [];
+    var allSnapshots = [];
+    candidateIds.forEach(function(groupId) {
+      var group = preLockBuild.groups[groupId];
+      var errors = validateCurrentMonthSyncGroupV2_(meta, group, candidateById[groupId]);
+      if (errors.length) {
+        validationConflicts.push({ paymentGroupId: groupId, reasons: errors });
+      } else {
+        allSnapshots.push(makeCurrentMonthSyncSnapshotV2_(group));
+      }
+    });
+    if (Object.keys(preLockBuild.groups).length !== candidateIds.length) {
+      validationConflicts.push({
+        reason: 'PRE_LOCK_GROUP_COUNT_MISMATCH',
+        expectedGroups: candidateIds.length,
+        actualGroups: Object.keys(preLockBuild.groups).length
+      });
+    }
+    if (validationConflicts.length) {
+      return {
+        success: false,
+        mode: mode,
+        message: 'Sync dibatalkan: calon baharu gagal validasi sumber semasa.',
+        conflicts: validationConflicts
+      };
+    }
+
+    allSnapshots.sort(function(a, b) { return a.sourceRow - b.sourceRow; });
+    var selectedSnapshots = allSnapshots.slice(0, 25);
+    var selectedPaymentGroupIds = selectedSnapshots.map(function(snapshot) { return snapshot.paymentGroupId; });
+    var remainingNewGroups = allSnapshots.length - selectedSnapshots.length;
+    var morePending = remainingNewGroups > 0;
+    var projectedChildRows = selectedSnapshots.reduce(function(total, snapshot) { return total + snapshot.childRows; }, 0);
+    var projectedTotalAmount = selectedSnapshots.reduce(function(total, snapshot) { return total + snapshot.amountTotal; }, 0);
+
+    var preLockConflicts = findCurrentMonthSyncStagingConflictsV2_(selectedSnapshots);
+    if (preLockConflicts.length) {
+      return {
+        success: false,
+        mode: mode,
+        tahun: meta.tahun,
+        bulanKey: meta.bulanKey,
+        sourceSheet: meta.sourceSheet,
+        selectedGroups: selectedSnapshots.length,
+        selectedPaymentGroupIds: selectedPaymentGroupIds,
+        message: 'Sync dibatalkan: konflik staging dijumpai sebelum script lock.',
+        conflicts: preLockConflicts,
+        remainingNewGroups: remainingNewGroups,
+        morePending: morePending
+      };
+    }
+
+    if (!allowWrite) {
+      return {
+        success: true,
+        mode: 'V2_CURRENT_MONTH_SYNC_PREVIEW_READ_ONLY',
+        tahun: meta.tahun,
+        bulanKey: meta.bulanKey,
+        sourceSheet: meta.sourceSheet,
+        selectedGroups: selectedSnapshots.length,
+        selectedPaymentGroupIds: selectedPaymentGroupIds,
+        projectedChildRows: projectedChildRows,
+        projectedTotalAmount: projectedTotalAmount,
+        appendedGroups: 0,
+        appendedChildRows: 0,
+        appendedTotalAmount: 0,
+        remainingNewGroups: remainingNewGroups,
+        morePending: morePending
+      };
+    }
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(30000)) {
+      return {
+        success: false,
+        mode: mode,
+        tahun: meta.tahun,
+        bulanKey: meta.bulanKey,
+        sourceSheet: meta.sourceSheet,
+        selectedGroups: selectedSnapshots.length,
+        selectedPaymentGroupIds: selectedPaymentGroupIds,
+        message: 'Sync dibatalkan: gagal mendapatkan script lock.',
+        appendedGroups: 0,
+        appendedChildRows: 0,
+        appendedTotalAmount: 0,
+        remainingNewGroups: remainingNewGroups,
+        morePending: morePending
+      };
+    }
+
+    var appendedChildRows = 0;
+    var appendedTotalAmount = 0;
+    try {
+      var freshBuild = buildCurrentMonthSyncGroupsV2_(meta, selectedPaymentGroupIds);
+      var sourceWindowConflicts = [];
+      var freshSnapshots = [];
+      var freshSnapshotById = {};
+      if (!freshBuild.success) {
+        sourceWindowConflicts.push({ reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW', detail: freshBuild.message });
+      } else {
+        selectedSnapshots.forEach(function(before) {
+          var freshGroup = freshBuild.groups[before.paymentGroupId];
+          var freshErrors = validateCurrentMonthSyncGroupV2_(meta, freshGroup, null);
+          if (freshErrors.length) {
+            sourceWindowConflicts.push({
+              paymentGroupId: before.paymentGroupId,
+              reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+              differences: freshErrors
+            });
+            return;
+          }
+          var freshSnapshot = makeCurrentMonthSyncSnapshotV2_(freshGroup);
+          var differences = compareCurrentMonthSyncSnapshotsV2_(before, freshSnapshot);
+          if (differences.length) {
+            sourceWindowConflicts.push({
+              paymentGroupId: before.paymentGroupId,
+              reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+              differences: differences,
+              before: before,
+              fresh: freshSnapshot
+            });
+          } else {
+            freshSnapshots.push(freshSnapshot);
+            freshSnapshotById[freshSnapshot.paymentGroupId] = freshSnapshot;
+          }
+        });
+        if (Object.keys(freshBuild.groups).length !== selectedSnapshots.length) {
+          sourceWindowConflicts.push({
+            reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+            detail: 'FRESH_GROUP_COUNT_MISMATCH',
+            expectedGroups: selectedSnapshots.length,
+            actualGroups: Object.keys(freshBuild.groups).length
+          });
+        }
+      }
+
+      var freshSelectedRows = [];
+      selectedPaymentGroupIds.forEach(function(groupId) {
+        var freshGroup = freshBuild.success ? freshBuild.groups[groupId] : null;
+        if (!freshGroup) return;
+        freshGroup.rows.forEach(function(row) { freshSelectedRows.push(row); });
+      });
+      if (!freshSelectedRows.length || freshSnapshots.length !== selectedSnapshots.length ||
+          Object.keys(freshSnapshotById).length !== selectedSnapshots.length) {
+        sourceWindowConflicts.push({
+          reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+          detail: 'FRESH_SELECTED_ROWS_EMPTY_OR_GROUP_COUNT_MISMATCH',
+          freshSelectedChildRows: freshSelectedRows.length,
+          expectedGroups: selectedSnapshots.length,
+          freshValidGroups: freshSnapshots.length
+        });
+      }
+      if (sourceWindowConflicts.length) {
+        return {
+          success: false,
+          mode: mode,
+          tahun: meta.tahun,
+          bulanKey: meta.bulanKey,
+          sourceSheet: meta.sourceSheet,
+          selectedGroups: selectedSnapshots.length,
+          selectedPaymentGroupIds: selectedPaymentGroupIds,
+          message: 'Sync dibatalkan sepenuhnya: sumber berubah semasa write window.',
+          conflicts: sourceWindowConflicts,
+          appendedGroups: 0,
+          appendedChildRows: 0,
+          appendedTotalAmount: 0,
+          remainingNewGroups: remainingNewGroups,
+          morePending: morePending
+        };
+      }
+
+      var finalStagingConflicts = findCurrentMonthSyncStagingConflictsV2_(freshSnapshots);
+      if (finalStagingConflicts.length) {
+        return {
+          success: false,
+          mode: mode,
+          tahun: meta.tahun,
+          bulanKey: meta.bulanKey,
+          sourceSheet: meta.sourceSheet,
+          selectedGroups: selectedSnapshots.length,
+          selectedPaymentGroupIds: selectedPaymentGroupIds,
+          message: 'Sync dibatalkan sepenuhnya: konflik staging dijumpai semasa final recheck.',
+          conflicts: finalStagingConflicts,
+          appendedGroups: 0,
+          appendedChildRows: 0,
+          appendedTotalAmount: 0,
+          remainingNewGroups: remainingNewGroups,
+          morePending: morePending
+        };
+      }
+
+      var ss = getEbayarMasterSpreadsheetForImportV2_();
+      var sheet = ss.getSheetByName(EBAYAR_PAYMENTS_TAB_V2);
+      if (!sheet) {
+        return { success: false, mode: mode, message: 'Payments tab tidak dijumpai.', appendedGroups: 0, appendedChildRows: 0 };
+      }
+      var headerIndex = getPaymentsHeaderIndexV2_(sheet);
+      var requiredHeaders = ['PAYMENT_ID', 'PAYMENT_GROUP_ID', 'SOURCE_YEAR', 'SOURCE_SHEET', 'SOURCE_ROW', 'SOURCE_ROW_HASH'];
+      var missingHeaders = requiredHeaders.filter(function(header) {
+        return headerIndex[header] === undefined || headerIndex[header] === null;
+      });
+      if (missingHeaders.length) {
+        return {
+          success: false,
+          mode: mode,
+          message: 'Header Payments hilang.',
+          missingHeaders: missingHeaders,
+          appendedGroups: 0,
+          appendedChildRows: 0
+        };
+      }
+
+      var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(function(header) {
+        return (header || '').toString().trim();
+      });
+      var timestampNow = Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'yyyy-MM-dd HH:mm:ss');
+      var rowsToAppend = freshSelectedRows.map(function(row) {
+        return mapDraftPaymentToMasterRowV2_(row, headerIndex, headers, timestampNow);
+      });
+      if (!rowsToAppend.length) {
+        return {
+          success: false,
+          mode: mode,
+          message: 'Sync dibatalkan: tiada fresh child rows untuk append.',
+          appendedGroups: 0,
+          appendedChildRows: 0
+        };
+      }
+      sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, headers.length).setValues(rowsToAppend);
+      appendedChildRows = rowsToAppend.length;
+      appendedTotalAmount = freshSnapshots.reduce(function(total, snapshot) { return total + snapshot.amountTotal; }, 0);
+    } finally {
+      lock.releaseLock();
+    }
+
+    var postWritePreview = getCurrentMonthPreviewDataV2_(meta);
+    var postWriteCompact = compactCurrentMonthPreviewV2_(meta, postWritePreview);
+    var selectedIdSet = {};
+    selectedPaymentGroupIds.forEach(function(groupId) { selectedIdSet[groupId] = true; });
+    var selectedStillNew = postWritePreview && postWritePreview.success === true
+      ? (postWritePreview.genuinelyNewCandidates || []).filter(function(candidate) {
+          return !!selectedIdSet[(candidate.paymentGroupId || '').toString()];
+        }).map(function(candidate) { return candidate.paymentGroupId; })
+      : selectedPaymentGroupIds.slice();
+    var postWritePresence = findCurrentMonthSyncStagingConflictsV2_(selectedSnapshots);
+    var fullyPresent = postWritePresence.length === selectedSnapshots.length && postWritePresence.every(function(conflict) {
+      return ['PAYMENT_GROUP_ID', 'SOURCE_LOCATION', 'SOURCE_ROW_HASH', 'SECONDARY_CONTENT_FINGERPRINT'].every(function(key) {
+        return conflict.matchingKeys.indexOf(key) !== -1;
+      });
+    });
+    var postWriteSource = buildCurrentMonthSyncGroupsV2_(meta, selectedPaymentGroupIds);
+    var postWriteSourceMatches = postWriteSource.success === true &&
+      Object.keys(postWriteSource.groups).length === selectedSnapshots.length &&
+      selectedSnapshots.every(function(before) {
+        var sourceGroup = postWriteSource.groups[before.paymentGroupId];
+        if (validateCurrentMonthSyncGroupV2_(meta, sourceGroup, null).length) return false;
+        return compareCurrentMonthSyncSnapshotsV2_(before, makeCurrentMonthSyncSnapshotV2_(sourceGroup)).length === 0;
+      });
+    var postWriteVerified = postWritePreview && postWritePreview.success === true && postWriteCompact.success === true &&
+      (postWritePreview.changedExistingGroups || 0) === 0 && selectedStillNew.length === 0 && fullyPresent && postWriteSourceMatches;
+
+    return {
+      success: postWriteVerified,
+      mode: postWriteVerified ? 'V2_CURRENT_MONTH_SYNC_GUARDED_WRITE' : 'V2_CURRENT_MONTH_SYNC_POST_WRITE_VERIFICATION_FAILED',
+      tahun: meta.tahun,
+      bulanKey: meta.bulanKey,
+      sourceSheet: meta.sourceSheet,
+      selectedGroups: selectedSnapshots.length,
+      selectedPaymentGroupIds: selectedPaymentGroupIds,
+      appendedGroups: selectedSnapshots.length,
+      appendedChildRows: appendedChildRows,
+      appendedTotalAmount: appendedTotalAmount,
+      remainingNewGroups: remainingNewGroups,
+      morePending: morePending,
+      postWriteExistingGroups: postWritePreview && postWritePreview.success ? (postWritePreview.existingUnchangedGroups || 0) : null,
+      postWriteGenuinelyNewGroups: postWritePreview && postWritePreview.success ? (postWritePreview.genuinelyNewGroups || 0) : null,
+      postWriteChangedExistingGroups: postWritePreview && postWritePreview.success ? (postWritePreview.changedExistingGroups || 0) : null,
+      postWriteProjectedChildRows: postWritePreview && postWritePreview.success ? (postWritePreview.projectedChildRows || 0) : null,
+      postWriteProjectedTotalAmount: postWritePreview && postWritePreview.success ? (postWritePreview.projectedTotalAmount || 0) : null,
+      postWriteSelectedGroupsStillNew: selectedStillNew,
+      postWriteSelectedGroupsFullyPresent: fullyPresent,
+      postWriteSelectedSourceGroupsUnchanged: postWriteSourceMatches,
+      message: postWriteVerified ? 'Sync bulan semasa selesai dan disahkan.' : 'Write selesai tetapi post-write verification gagal; tiada rollback atau batch kedua dijalankan.'
+    };
+  } catch (err) {
+    Logger.log('syncCurrentMonthEbayarV2Core_ error: ' + err.message);
+    return { success: false, mode: mode, message: err.message };
+  }
+}
+
+function testSyncCurrentMonthEbayarV2CorePreview() {
+  var meta = getCurrentEbayarMonthMetaV2_();
+  var result = meta.success ? syncCurrentMonthEbayarV2Core_(meta, false) : meta;
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
 
