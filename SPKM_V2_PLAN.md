@@ -317,4 +317,63 @@ V2 hanya layak menggantikan V1 apabila:
 
 ---
 
+## 11. Milestone eBayar V2 Shadow Data Jan–Jul 2026 — COMPLETE
+
+Migration dan validation shadow data eBayar V2 bagi Januari hingga Julai 2026 telah selesai. Milestone ini tidak bermaksud production frontend/web app telah cut over kepada V2.
+
+### Pembetulan reader dan reconciliation Januari–Jun 2026
+
+- Bug normalization `BULAN_KEY` telah diperbaiki. Nilai yang ditukar oleh Google Sheets kepada objek `Date` kini dinormalisasi dengan selamat kepada format bulan canonical.
+- Perbandingan legacy dengan V2 bagi Januari hingga Jun 2026 lulus tepat untuk semua metrik yang diuji.
+
+### July 2026 catch-up
+
+- Source sheet: `JULAI2026`.
+- Sebelum catch-up: 32 source groups telah wujud.
+- 39 genuinely new groups dikenal pasti dan diimport.
+- 60 child payment rows ditambah dengan jumlah catch-up RM1,870.
+- Batch 1: source rows 34–58, 25 groups, 37 child rows, RM1,150.
+- Batch 2: source rows 59–72, 14 groups, 23 child rows, RM720.
+
+Catch-up dilaksanakan melalui guarded importer dengan perlindungan berikut:
+
+- Payment group IDs mesti dinyatakan secara explicit.
+- Maksimum 25 groups bagi setiap batch.
+- Source row July dihadkan kepada julat 34–72.
+- Preview mesti mengklasifikasikan setiap ID sebagai `GENUINELY_NEW`.
+- Staging disemak semula menggunakan `PAYMENT_GROUP_ID`, source location, `SOURCE_ROW_HASH` dan secondary content fingerprint.
+- Script lock digunakan sepanjang write window.
+- Source dibaca semula selepas lock diperoleh dan TOCTOU validation dijalankan.
+- Sebarang conflict membatalkan keseluruhan batch.
+- Append dilakukan melalui satu panggilan `setValues` secara batch, tanpa partial-write loop.
+
+### Keadaan akhir July 2026
+
+- `sourceGroupsScanned`: 71.
+- `existingUnchangedGroups`: 71.
+- `changedExistingGroups`: 0.
+- `genuinelyNewGroups`: 0.
+- `projectedChildRows`: 0.
+- `projectedTotalAmount`: RM0.
+- `highestExistingJulySourceRow`: 72.
+
+### Validasi akhir legacy vs V2, Januari–Julai 2026
+
+- January: 107 paid, RM3,860.
+- February: 114 paid, RM3,840.
+- March: 110 paid, RM3,630.
+- April: 112 paid, RM3,680.
+- May: 117 paid, RM4,020.
+- June: 172 paid, RM5,780.
+- July: 114 paid, 69 unpaid, 183 total students, RM3,730.
+- Semua metrik matched exactly; `onlyLegacy: []`, `onlyV2: []`, dan semua diffs ialah zero.
+
+### Nota operasi
+
+- Satu anomaly sejarah June, `GROUP_ID_MULTIPLE_STAGED_HASHES`, masih wujud. Ia telah disiasat dan disahkan tidak berkaitan dengan July catch-up.
+- Production frontend/web app belum cut over kepada V2.
+- Tiada production deployment dilakukan sebagai sebahagian daripada kerja migration ini.
+
+---
+
 *Dokumen perancangan diwujudkan pada 24 Julai 2026.*

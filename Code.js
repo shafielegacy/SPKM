@@ -1943,6 +1943,11 @@ function createEbayarTriggers() {
   return 'Trigger berjaya dipasang.';
 }
 
+function testSyncOgosManual() {
+  var result = syncFormMinusBayar({ bulan: 'OGOS2026' });
+  Logger.log(JSON.stringify(result));
+}
+
 // ============================================================
 // Khatam Iqra' / Khatam Quran — onFormSubmit notification trigger
 // ============================================================
@@ -2089,6 +2094,32 @@ function makeBulanKeyV2_(tahun, bulan) {
   return y + '-' + monthNo;
 }
 
+function normalizeBulanKeyV2_(value, tahunFallback, bulanFallback) {
+  var canonicalPattern = /^(\d{4})-(0[1-9]|1[0-2])$/;
+  var fallbackKey = makeBulanKeyV2_(tahunFallback, bulanFallback);
+  if (!canonicalPattern.test(fallbackKey)) fallbackKey = '';
+
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return fallbackKey;
+    var dateKey = Utilities.formatDate(value, 'Asia/Singapore', 'yyyy-MM');
+    return fallbackKey || (canonicalPattern.test(dateKey) ? dateKey : '');
+  }
+
+  var raw = (value === null || value === undefined) ? '' : value.toString().trim();
+  if (canonicalPattern.test(raw)) return raw;
+
+  // Support Date values that crossed a JSON boundary and arrived as ISO strings.
+  if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+    var parsedDate = new Date(raw);
+    if (!isNaN(parsedDate.getTime())) {
+      var parsedDateKey = Utilities.formatDate(parsedDate, 'Asia/Singapore', 'yyyy-MM');
+      return fallbackKey || (canonicalPattern.test(parsedDateKey) ? parsedDateKey : '');
+    }
+  }
+
+  return fallbackKey;
+}
+
 function getEbayarMasterSpreadsheet_(options) {
   options = options || {};
   var props = PropertiesService.getScriptProperties();
@@ -2162,6 +2193,11 @@ function getPaymentsRowsV2_() {
   var rows = data.map(function(r, offset) {
     var obj = { _rowNumber: offset + 2 };
     headers.forEach(function(h, i) { if (h) obj[h] = r[i]; });
+    obj.BULAN_KEY = normalizeBulanKeyV2_(
+      obj.BULAN_KEY,
+      obj.TAHUN || obj.SOURCE_YEAR,
+      obj.BULAN || obj.SOURCE_SHEET
+    );
     obj._idx = idx;
     return obj;
   });
@@ -2820,6 +2856,1236 @@ function dryRunImportEbayarSourceV2(params) {
   }
 }
 
+function makeEbayarSourceLocationKeyV2_(sourceYear, sourceSheet, sourceRow) {
+  return [sourceYear, sourceSheet, sourceRow].map(function(value) {
+    return (value === null || value === undefined) ? '' : value.toString().trim();
+  }).join('|');
+}
+
+function makeEbayarSourceContentFingerprintV2_(row) {
+  row = row || {};
+
+  function normalizeTimestamp(value) {
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      return Utilities.formatDate(value, 'Asia/Singapore', "yyyy-MM-dd'T'HH:mm:ss");
+    }
+    var raw = (value === null || value === undefined) ? '' : value.toString().replace(/\s+/g, ' ').trim();
+    if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+      var parsed = new Date(raw);
+      if (!isNaN(parsed.getTime())) {
+        return Utilities.formatDate(parsed, 'Asia/Singapore', "yyyy-MM-dd'T'HH:mm:ss");
+      }
+    }
+    return raw.toUpperCase();
+  }
+
+  var amount = parseEbayarAmountV2_(row.JUMLAH);
+  var amountKey = (typeof amount === 'number' && isFinite(amount))
+    ? amount.toFixed(2)
+    : ((amount === null || amount === undefined) ? '' : amount.toString().replace(/\s+/g, ' ').trim().toUpperCase());
+  var raw = [
+    normalizeTimestamp(row.TIMESTAMP),
+    normalizeYuranNameV2_(row.NAMA_MURID_RAW),
+    (row.BULAN || '').toString().replace(/\s+/g, ' ').trim().toUpperCase(),
+    (row.TAHUN || '').toString().replace(/[^0-9]/g, ''),
+    amountKey,
+    (row.STATUS || '').toString().replace(/\s+/g, ' ').trim().toUpperCase()
+  ].join('|');
+
+  try {
+    if (typeof Utilities !== 'undefined' && Utilities.computeDigest) {
+      var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw);
+      return bytes.map(function(b) {
+        var value = b < 0 ? b + 256 : b;
+        return ('0' + value.toString(16)).slice(-2);
+      }).join('');
+    }
+  } catch (err) {
+    Logger.log('makeEbayarSourceContentFingerprintV2_ fallback: ' + err.message);
+  }
+
+  return raw;
+}
+
+function previewJuly2026CatchupV2() {
+  try {
+    var targetSourceYear = 2026;
+    var targetSourceSheet = 'JULAI2026';
+    var targetBulanKey = '2026-07';
+    var draft = buildEbayarImportRowsDryRunV2_({
+      sourceYear: targetSourceYear,
+      includeDraftRows: true
+    });
+    if (!draft || !draft.success) return draft;
+
+    var anomalies = [];
+    var anomalyKeys = {};
+
+    function addAnomaly(type, key, details) {
+      var anomalyKey = type + '|' + key;
+      if (anomalyKeys[anomalyKey]) return;
+      anomalyKeys[anomalyKey] = true;
+      var item = { type: type, key: key };
+      Object.keys(details || {}).forEach(function(name) { item[name] = details[name]; });
+      anomalies.push(item);
+    }
+
+    function getIndexEntry(index, key) {
+      if (!index[key]) {
+        index[key] = { groupIds: {}, hashes: {}, locations: {}, rowNumbers: {} };
+      }
+      return index[key];
+    }
+
+    function addIndexValues(entry, groupId, hash, location, rowNumber) {
+      if (groupId) entry.groupIds[groupId] = true;
+      if (hash) entry.hashes[hash] = true;
+      if (location) entry.locations[location] = true;
+      if (rowNumber) entry.rowNumbers[rowNumber] = true;
+    }
+
+    function keysOf(map) {
+      return Object.keys(map || {}).sort();
+    }
+
+    var staging = getPaymentsRowsV2_();
+    var existingGroups = {};
+    var existingHashes = {};
+    var existingLocations = {};
+    var existingContentFingerprints = {};
+    var highestExistingJulySourceRow = 0;
+
+    (staging.rows || []).forEach(function(row) {
+      var groupIdRaw = (row.PAYMENT_GROUP_ID || '').toString().trim();
+      var groupId = groupIdRaw ? makeImportPaymentGroupIdV2_({ PAYMENT_GROUP_ID: groupIdRaw }) : '';
+      var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+      var sourceYear = (row.SOURCE_YEAR || '').toString().trim();
+      var sourceSheet = (row.SOURCE_SHEET || '').toString().trim();
+      var sourceRow = (row.SOURCE_ROW || '').toString().trim();
+      var location = makeEbayarSourceLocationKeyV2_(sourceYear, sourceSheet, sourceRow);
+      var stagingRowNumber = row._rowNumber || '';
+
+      if (groupId) addIndexValues(getIndexEntry(existingGroups, groupId), groupId, hash, location, stagingRowNumber);
+      if (hash) addIndexValues(getIndexEntry(existingHashes, hash), groupId, hash, location, stagingRowNumber);
+      if (sourceYear && sourceSheet && sourceRow) {
+        addIndexValues(getIndexEntry(existingLocations, location), groupId, hash, location, stagingRowNumber);
+      }
+
+      var fingerprint = makeEbayarSourceContentFingerprintV2_(row);
+      if (fingerprint) {
+        addIndexValues(getIndexEntry(existingContentFingerprints, fingerprint), groupId, hash, location, stagingRowNumber);
+      }
+
+      if (hash && !groupId) {
+        addAnomaly('HASH_EXISTS_GROUP_ID_MISSING', hash, {
+          stagingRowNumber: stagingRowNumber,
+          sourceLocation: location
+        });
+      }
+
+      if (parseInt(sourceYear, 10) === targetSourceYear && sourceSheet.toUpperCase() === targetSourceSheet) {
+        var numericSourceRow = parseInt(sourceRow, 10);
+        if (!isNaN(numericSourceRow) && numericSourceRow > highestExistingJulySourceRow) {
+          highestExistingJulySourceRow = numericSourceRow;
+        }
+      }
+    });
+
+    Object.keys(existingGroups).forEach(function(groupId) {
+      var entry = existingGroups[groupId];
+      if (keysOf(entry.hashes).length > 1) {
+        addAnomaly('GROUP_ID_MULTIPLE_STAGED_HASHES', groupId, {
+          stagedHashes: keysOf(entry.hashes),
+          stagedLocations: keysOf(entry.locations)
+        });
+      }
+      if (keysOf(entry.locations).length > 1) {
+        addAnomaly('GROUP_ID_MULTIPLE_SOURCE_LOCATIONS', groupId, {
+          stagedLocations: keysOf(entry.locations)
+        });
+      }
+    });
+
+    Object.keys(existingLocations).forEach(function(location) {
+      var entry = existingLocations[location];
+      if (keysOf(entry.groupIds).length > 1) {
+        addAnomaly('DUPLICATE_STAGED_SOURCE_IDENTITY', location, {
+          stagedGroupIds: keysOf(entry.groupIds),
+          stagedHashes: keysOf(entry.hashes)
+        });
+      }
+    });
+
+    var julyDraftRows = (draft.draftRows || []).filter(function(row) {
+      var sourceYear = parseInt(row.SOURCE_YEAR, 10);
+      var sourceSheet = (row.SOURCE_SHEET || '').toString().trim().toUpperCase();
+      var bulanKey = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN, row.BULAN || row.SOURCE_SHEET);
+      return sourceYear === targetSourceYear && sourceSheet === targetSourceSheet && bulanKey === targetBulanKey;
+    });
+
+    var sourceTabsMap = {};
+    var groups = {};
+    var sourceIdentityGroups = {};
+
+    julyDraftRows.forEach(function(row) {
+      var paymentGroupId = makeImportPaymentGroupIdV2_(row);
+      var sourceYear = parseInt(row.SOURCE_YEAR, 10);
+      var sourceSheet = (row.SOURCE_SHEET || '').toString().trim();
+      var sourceRow = parseInt(row.SOURCE_ROW, 10);
+      var sourceRowText = isNaN(sourceRow) ? (row.SOURCE_ROW || '').toString().trim() : sourceRow.toString();
+      var location = makeEbayarSourceLocationKeyV2_(sourceYear, sourceSheet, sourceRowText);
+      var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+      var bulanKey = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN, row.BULAN || row.SOURCE_SHEET);
+      var status = (row.STATUS || '').toString().trim().toUpperCase();
+      var name = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+      var contentFingerprint = makeEbayarSourceContentFingerprintV2_(row);
+      var amount = parseEbayarAmountV2_(row.AMOUNT_TOTAL || row.JUMLAH);
+      var numericAmount = (typeof amount === 'number' && isFinite(amount)) ? amount : null;
+      var groupKey = paymentGroupId || ('SOURCE-' + location);
+
+      sourceTabsMap[sourceSheet] = true;
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          paymentGroupId: paymentGroupId,
+          sourceYear: sourceYear,
+          sourceSheet: sourceSheet,
+          sourceRow: isNaN(sourceRow) ? sourceRowText : sourceRow,
+          sourceLocation: location,
+          sourceRowHash: hash,
+          bulanKey: bulanKey,
+          status: status,
+          rawName: (row.NAMA_MURID_RAW || '').toString(),
+          normalizedNamesMap: {},
+          paidNamesMap: {},
+          hashes: {},
+          locations: {},
+          statuses: {},
+          amounts: {},
+          contentFingerprints: {},
+          childRows: 0,
+          amountTotal: numericAmount,
+          hasPaidStatusRows: false
+        };
+      }
+
+      var group = groups[groupKey];
+      group.childRows++;
+      if (name) group.normalizedNamesMap[name] = true;
+      if (!status || status === 'SELESAI') {
+        group.hasPaidStatusRows = true;
+        if (name) group.paidNamesMap[name] = true;
+      }
+      if (hash) group.hashes[hash] = true;
+      if (location) group.locations[location] = true;
+      group.statuses[status || '(blank)'] = true;
+      if (numericAmount !== null) group.amounts[numericAmount.toFixed(2)] = true;
+      if (contentFingerprint) group.contentFingerprints[contentFingerprint] = true;
+
+      if (!sourceIdentityGroups[location]) sourceIdentityGroups[location] = {};
+      sourceIdentityGroups[location][groupKey] = true;
+    });
+
+    Object.keys(sourceIdentityGroups).forEach(function(location) {
+      var groupKeys = keysOf(sourceIdentityGroups[location]);
+      if (groupKeys.length > 1) {
+        addAnomaly('DUPLICATE_SOURCE_IDENTITY', location, { sourceGroupKeys: groupKeys });
+      }
+    });
+
+    var unchanged = [];
+    var changed = [];
+    var genuinelyNew = [];
+    var uniquePaidNamesMap = {};
+    var projectedChildRows = 0;
+    var projectedTotalAmount = 0;
+    var projectedPaidStatusAmount = 0;
+
+    function collectExistingDetails(group) {
+      var stagedGroupIds = {};
+      var stagedHashes = {};
+      var stagedLocations = {};
+      var stagedRowNumbers = {};
+
+      function collect(entry) {
+        if (!entry) return;
+        keysOf(entry.groupIds).forEach(function(value) { stagedGroupIds[value] = true; });
+        keysOf(entry.hashes).forEach(function(value) { stagedHashes[value] = true; });
+        keysOf(entry.locations).forEach(function(value) { stagedLocations[value] = true; });
+        keysOf(entry.rowNumbers).forEach(function(value) { stagedRowNumbers[value] = true; });
+      }
+
+      collect(existingGroups[group.paymentGroupId]);
+      collect(existingLocations[group.sourceLocation]);
+      keysOf(group.hashes).forEach(function(hash) { collect(existingHashes[hash]); });
+      keysOf(group.contentFingerprints).forEach(function(fingerprint) { collect(existingContentFingerprints[fingerprint]); });
+      return {
+        stagedGroupIds: keysOf(stagedGroupIds),
+        stagedHashes: keysOf(stagedHashes),
+        stagedLocations: keysOf(stagedLocations),
+        stagedRowNumbers: keysOf(stagedRowNumbers)
+      };
+    }
+
+    function candidateSummary(group, classification) {
+      var existing = collectExistingDetails(group);
+      return {
+        paymentGroupId: group.paymentGroupId,
+        sourceYear: group.sourceYear,
+        sourceSheet: group.sourceSheet,
+        sourceRow: group.sourceRow,
+        sourceRowHash: group.sourceRowHash,
+        bulanKey: group.bulanKey,
+        status: keysOf(group.statuses).join(', '),
+        rawName: group.rawName,
+        normalizedNames: keysOf(group.normalizedNamesMap),
+        childRows: group.childRows,
+        amountTotal: group.amountTotal,
+        classification: classification,
+        contentFingerprints: keysOf(group.contentFingerprints),
+        existingStagedGroupIds: existing.stagedGroupIds,
+        existingStagedHashes: existing.stagedHashes,
+        existingStagedLocations: existing.stagedLocations,
+        existingStagingRowNumbers: existing.stagedRowNumbers
+      };
+    }
+
+    Object.keys(groups).sort(function(a, b) {
+      var rowA = parseInt(groups[a].sourceRow, 10);
+      var rowB = parseInt(groups[b].sourceRow, 10);
+      if (isNaN(rowA)) rowA = Number.MAX_SAFE_INTEGER;
+      if (isNaN(rowB)) rowB = Number.MAX_SAFE_INTEGER;
+      return rowA - rowB || a.localeCompare(b);
+    }).forEach(function(groupKey) {
+      var group = groups[groupKey];
+      var hashes = keysOf(group.hashes);
+      var locations = keysOf(group.locations);
+      var fingerprints = keysOf(group.contentFingerprints);
+
+      if (!group.paymentGroupId) {
+        addAnomaly('SOURCE_GROUP_ID_MISSING', group.sourceLocation, {});
+      }
+      if (hashes.length !== 1) {
+        addAnomaly('SOURCE_GROUP_HASH_COUNT_INVALID', group.paymentGroupId || group.sourceLocation, { sourceHashes: hashes });
+      }
+      if (locations.length !== 1) {
+        addAnomaly('SOURCE_GROUP_LOCATION_COUNT_INVALID', group.paymentGroupId || group.sourceLocation, { sourceLocations: locations });
+      }
+      if (keysOf(group.statuses).length > 1) {
+        addAnomaly('SOURCE_GROUP_MULTIPLE_STATUSES', group.paymentGroupId || group.sourceLocation, { statuses: keysOf(group.statuses) });
+      }
+      if (keysOf(group.amounts).length > 1) {
+        addAnomaly('SOURCE_GROUP_MULTIPLE_AMOUNTS', group.paymentGroupId || group.sourceLocation, { amounts: keysOf(group.amounts) });
+      }
+      if (group.amountTotal === null) {
+        addAnomaly('SOURCE_GROUP_AMOUNT_INVALID', group.paymentGroupId || group.sourceLocation, {});
+      }
+
+      var hashExists = hashes.some(function(hash) { return !!existingHashes[hash]; });
+      var groupExists = !!(group.paymentGroupId && existingGroups[group.paymentGroupId]);
+      var locationExists = !!existingLocations[group.sourceLocation];
+      var contentMatch = fingerprints.some(function(fingerprint) { return !!existingContentFingerprints[fingerprint]; });
+      var classification;
+
+      if (hashExists) {
+        classification = 'UNCHANGED_EXISTING';
+        if (!groupExists) {
+          addAnomaly('HASH_EXISTS_GROUP_ID_MISSING', group.sourceRowHash, {
+            candidatePaymentGroupId: group.paymentGroupId,
+            sourceLocation: group.sourceLocation
+          });
+        }
+      } else if (groupExists || locationExists) {
+        classification = 'CHANGED_EXISTING_REVIEW';
+      } else if (contentMatch) {
+        classification = 'CHANGED_EXISTING_REVIEW';
+        addAnomaly('SECONDARY_CONTENT_FINGERPRINT_MATCH', group.paymentGroupId || group.sourceLocation, {
+          sourceLocation: group.sourceLocation,
+          contentFingerprints: fingerprints
+        });
+      } else if (!group.paymentGroupId || hashes.length !== 1 || locations.length !== 1) {
+        classification = 'CHANGED_EXISTING_REVIEW';
+      } else {
+        classification = 'GENUINELY_NEW';
+      }
+
+      var summary = candidateSummary(group, classification);
+      if (classification === 'UNCHANGED_EXISTING') {
+        unchanged.push(summary);
+      } else if (classification === 'CHANGED_EXISTING_REVIEW') {
+        changed.push(summary);
+      } else {
+        genuinelyNew.push(summary);
+        projectedChildRows += group.childRows;
+        if (group.amountTotal !== null) {
+          projectedTotalAmount += group.amountTotal;
+          if (group.hasPaidStatusRows) projectedPaidStatusAmount += group.amountTotal;
+        }
+        keysOf(group.paidNamesMap).forEach(function(name) { uniquePaidNamesMap[name] = true; });
+
+        var numericSourceRow = parseInt(group.sourceRow, 10);
+        if (!isNaN(numericSourceRow) && numericSourceRow <= highestExistingJulySourceRow) {
+          addAnomaly('NEW_CANDIDATE_AT_OR_BELOW_HIGHEST_STAGED_ROW', group.paymentGroupId, {
+            sourceRow: numericSourceRow,
+            highestExistingJulySourceRow: highestExistingJulySourceRow
+          });
+        }
+      }
+    });
+
+    var uniquePaidNames = keysOf(uniquePaidNamesMap);
+    return {
+      success: true,
+      mode: 'V2_JULY_2026_CATCHUP_PREVIEW_READ_ONLY',
+      sourceTabs: keysOf(sourceTabsMap),
+      sourceGroupsScanned: Object.keys(groups).length,
+      existingUnchangedGroups: unchanged.length,
+      changedExistingGroups: changed.length,
+      genuinelyNewGroups: genuinelyNew.length,
+      projectedChildRows: projectedChildRows,
+      uniquePaidNamesCount: uniquePaidNames.length,
+      uniquePaidNames: uniquePaidNames,
+      projectedTotalAmount: projectedTotalAmount,
+      projectedPaidStatusAmount: projectedPaidStatusAmount,
+      highestExistingJulySourceRow: highestExistingJulySourceRow,
+      genuinelyNewCandidates: genuinelyNew,
+      sampleNewCandidates: genuinelyNew.slice(0, 10),
+      sampleChangedExistingCandidates: changed.slice(0, 10),
+      anomalies: anomalies
+    };
+  } catch (err) {
+    Logger.log('previewJuly2026CatchupV2 error: ' + err.message);
+    return { success: false, mode: 'V2_JULY_2026_CATCHUP_PREVIEW_READ_ONLY', message: err.message };
+  }
+}
+
+function testPreviewJuly2026CatchupV2() {
+  var result = previewJuly2026CatchupV2();
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function testPreviewJuly2026CatchupCompactV2() {
+  var result = previewJuly2026CatchupV2();
+  if (!result || result.success !== true) {
+    var failure = {
+      success: false,
+      message: result && result.message ? result.message : 'Preview July 2026 gagal tanpa mesej.'
+    };
+    Logger.log(JSON.stringify(failure));
+    return failure;
+  }
+
+  var anomalies = result.anomalies || [];
+  var anomalyTypes = {};
+  anomalies.forEach(function(anomaly) {
+    var type = (anomaly && anomaly.type ? anomaly.type : '(UNKNOWN)').toString();
+    anomalyTypes[type] = (anomalyTypes[type] || 0) + 1;
+  });
+
+  var candidates = (result.genuinelyNewCandidates || []).slice().sort(function(a, b) {
+    var rowA = parseInt(a && a.sourceRow, 10);
+    var rowB = parseInt(b && b.sourceRow, 10);
+    if (isNaN(rowA)) rowA = Number.MAX_SAFE_INTEGER;
+    if (isNaN(rowB)) rowB = Number.MAX_SAFE_INTEGER;
+    if (rowA !== rowB) return rowA - rowB;
+    return ((a && a.paymentGroupId) || '').toString().localeCompare(((b && b.paymentGroupId) || '').toString());
+  });
+  var numericSourceRows = candidates.map(function(candidate) {
+    return parseInt(candidate && candidate.sourceRow, 10);
+  }).filter(function(sourceRow) {
+    return !isNaN(sourceRow);
+  });
+  var allRowsNumeric = numericSourceRows.length === candidates.length;
+  var highestExisting = parseInt(result.highestExistingJulySourceRow, 10);
+  var compact = {
+    success: result.success,
+    sourceGroupsScanned: result.sourceGroupsScanned,
+    existingUnchangedGroups: result.existingUnchangedGroups,
+    changedExistingGroups: result.changedExistingGroups,
+    genuinelyNewGroups: result.genuinelyNewGroups,
+    projectedChildRows: result.projectedChildRows,
+    uniquePaidNamesCount: result.uniquePaidNamesCount,
+    projectedTotalAmount: result.projectedTotalAmount,
+    projectedPaidStatusAmount: result.projectedPaidStatusAmount,
+    highestExistingJulySourceRow: result.highestExistingJulySourceRow,
+    anomalyCount: anomalies.length,
+    anomalyTypes: anomalyTypes,
+    genuinelyNewPaymentGroupIds: candidates.map(function(candidate) { return candidate.paymentGroupId; }),
+    minimumGenuinelyNewSourceRow: numericSourceRows.length ? Math.min.apply(null, numericSourceRows) : null,
+    maximumGenuinelyNewSourceRow: numericSourceRows.length ? Math.max.apply(null, numericSourceRows) : null,
+    allGenuinelyNewRowsAboveHighestExisting: allRowsNumeric && !isNaN(highestExisting) && candidates.every(function(candidate) {
+      return parseInt(candidate.sourceRow, 10) > highestExisting;
+    }),
+    allClassificationsGenuinelyNew: candidates.every(function(candidate) {
+      return candidate.classification === 'GENUINELY_NEW';
+    }),
+    changedExistingIsZero: result.changedExistingGroups === 0
+  };
+  Logger.log(JSON.stringify(compact));
+  return compact;
+}
+
+function testJulyCatchupAnomaliesV2() {
+  var result = previewJuly2026CatchupV2();
+  if (!result || result.success !== true) {
+    var failure = { success: false, anomalyCount: 0, anomalies: [] };
+    Logger.log(JSON.stringify(failure));
+    return failure;
+  }
+
+  var genuinelyNewIds = {};
+  (result.genuinelyNewCandidates || []).forEach(function(candidate) {
+    var groupId = (candidate.paymentGroupId || '').toString().trim();
+    if (groupId) genuinelyNewIds[groupId] = true;
+  });
+
+  var targetGroupIds = {};
+  (result.anomalies || []).forEach(function(anomaly) {
+    if (anomaly && anomaly.type === 'GROUP_ID_MULTIPLE_STAGED_HASHES') {
+      var groupId = (anomaly.key || '').toString().trim();
+      if (groupId) targetGroupIds[groupId] = true;
+    }
+  });
+
+  var stagedByGroupId = {};
+  if (Object.keys(targetGroupIds).length) {
+    var staging = getPaymentsRowsV2_();
+    (staging.rows || []).forEach(function(row) {
+      var rawGroupId = (row.PAYMENT_GROUP_ID || '').toString().trim();
+      var groupId = rawGroupId ? makeImportPaymentGroupIdV2_({ PAYMENT_GROUP_ID: rawGroupId }) : '';
+      if (!targetGroupIds[groupId]) return;
+      if (!stagedByGroupId[groupId]) {
+        stagedByGroupId[groupId] = {
+          hashes: {},
+          locations: {},
+          stagingRowNumbers: {},
+          sourceYears: {},
+          sourceSheets: {},
+          sourceRows: {}
+        };
+      }
+      var entry = stagedByGroupId[groupId];
+      var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+      var sourceYear = (row.SOURCE_YEAR || '').toString().trim();
+      var sourceSheet = (row.SOURCE_SHEET || '').toString().trim();
+      var sourceRow = (row.SOURCE_ROW || '').toString().trim();
+      var location = makeEbayarSourceLocationKeyV2_(sourceYear, sourceSheet, sourceRow);
+      if (hash) entry.hashes[hash] = true;
+      if (sourceYear && sourceSheet && sourceRow) entry.locations[location] = true;
+      if (row._rowNumber) entry.stagingRowNumbers[row._rowNumber] = true;
+      if (sourceYear) entry.sourceYears[sourceYear] = true;
+      if (sourceSheet) entry.sourceSheets[sourceSheet] = true;
+      if (sourceRow) entry.sourceRows[sourceRow] = true;
+    });
+  }
+
+  function sortedKeys(map, numeric) {
+    return Object.keys(map || {}).sort(numeric
+      ? function(a, b) { return parseInt(a, 10) - parseInt(b, 10); }
+      : undefined);
+  }
+
+  var anomalies = (result.anomalies || []).map(function(anomaly) {
+    if (!anomaly || anomaly.type !== 'GROUP_ID_MULTIPLE_STAGED_HASHES') return anomaly;
+    var paymentGroupId = (anomaly.key || '').toString().trim();
+    var entry = stagedByGroupId[paymentGroupId] || {
+      hashes: {}, locations: {}, stagingRowNumbers: {}, sourceYears: {}, sourceSheets: {}, sourceRows: {}
+    };
+    var sourceYears = sortedKeys(entry.sourceYears, true);
+    var sourceSheets = sortedKeys(entry.sourceSheets, false);
+    var sourceRows = sortedKeys(entry.sourceRows, true).map(function(value) { return parseInt(value, 10); });
+    var belongsToSourceYear2026 = sourceYears.some(function(value) { return parseInt(value, 10) === 2026; });
+    var belongsToSourceSheetJulai2026 = sourceSheets.some(function(value) {
+      return value.toUpperCase() === 'JULAI2026';
+    });
+    var appearsInGenuinelyNewCandidates = !!genuinelyNewIds[paymentGroupId];
+    var sourceRowAtOrBelow33 = sourceRows.length > 0 && sourceRows.every(function(value) {
+      return !isNaN(value) && value <= 33;
+    });
+    var canAffectCandidateSourceRows34To72 = appearsInGenuinelyNewCandidates || sourceRows.some(function(value) {
+      return !isNaN(value) && value >= 34 && value <= 72;
+    });
+
+    return {
+      type: anomaly.type,
+      key: anomaly.key,
+      paymentGroupId: paymentGroupId,
+      stagedHashes: anomaly.stagedHashes || sortedKeys(entry.hashes, false),
+      stagedLocations: anomaly.stagedLocations || sortedKeys(entry.locations, false),
+      stagingRowNumbers: sortedKeys(entry.stagingRowNumbers, true).map(function(value) { return parseInt(value, 10); }),
+      sourceYears: sourceYears,
+      sourceSheets: sourceSheets,
+      sourceRows: sourceRows,
+      belongsToSourceYear2026: belongsToSourceYear2026,
+      belongsToSourceSheetJulai2026: belongsToSourceSheetJulai2026,
+      belongsToJuly2026Source: belongsToSourceYear2026 && belongsToSourceSheetJulai2026,
+      sourceRowAtOrBelow33: sourceRowAtOrBelow33,
+      appearsInGenuinelyNewCandidates: appearsInGenuinelyNewCandidates,
+      canAffectCandidateSourceRows34To72: canAffectCandidateSourceRows34To72
+    };
+  });
+  var output = {
+    success: true,
+    anomalyCount: anomalies.length,
+    anomalies: anomalies
+  };
+  Logger.log(JSON.stringify(output));
+  return output;
+}
+
+function importJuly2026CatchupGuardedV2(params) {
+  params = params || {};
+  var allowWrite = params.allowWrite === true;
+  var mode = allowWrite
+    ? 'V2_JULY_2026_CATCHUP_GUARDED_WRITE'
+    : 'V2_JULY_2026_CATCHUP_GUARDED_PREVIEW_READ_ONLY';
+
+  try {
+    if (!Array.isArray(params.paymentGroupIds) || !params.paymentGroupIds.length) {
+      return { success: false, mode: mode, message: 'paymentGroupIds mesti senarai yang tidak kosong.' };
+    }
+    if (params.paymentGroupIds.length > 25) {
+      return { success: false, mode: mode, message: 'Safety limit: maksimum 25 paymentGroupIds setiap batch.' };
+    }
+
+    var requestedGroupIds = [];
+    var requestedIdSet = {};
+    var requestedSourceRows = {};
+    var invalidGroupIds = [];
+    var duplicateGroupIds = [];
+    params.paymentGroupIds.forEach(function(value) {
+      var groupId = (value || '').toString().trim();
+      var match = groupId.match(/^PG-2026-JULAI2026-(\d+)$/);
+      var sourceRow = match ? parseInt(match[1], 10) : NaN;
+      if (!match || isNaN(sourceRow) || sourceRow < 34 || sourceRow > 72) {
+        invalidGroupIds.push(groupId);
+        return;
+      }
+      if (requestedIdSet[groupId]) {
+        duplicateGroupIds.push(groupId);
+        return;
+      }
+      requestedIdSet[groupId] = true;
+      requestedSourceRows[groupId] = sourceRow;
+      requestedGroupIds.push(groupId);
+    });
+
+    if (invalidGroupIds.length) {
+      return {
+        success: false,
+        mode: mode,
+        message: 'Payment group ID tidak sah atau SOURCE_ROW di luar 34-72.',
+        invalidGroupIds: invalidGroupIds
+      };
+    }
+    if (duplicateGroupIds.length) {
+      return {
+        success: false,
+        mode: mode,
+        message: 'paymentGroupIds mengandungi ID pendua.',
+        duplicateGroupIds: duplicateGroupIds
+      };
+    }
+    requestedGroupIds.sort(function(a, b) { return requestedSourceRows[a] - requestedSourceRows[b]; });
+
+    var preview = previewJuly2026CatchupV2();
+    if (!preview || preview.success !== true) {
+      return {
+        success: false,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        message: preview && preview.message ? preview.message : 'Preview July 2026 gagal.'
+      };
+    }
+    if (preview.changedExistingGroups !== 0) {
+      return {
+        success: false,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        message: 'Catch-up dibatalkan: changedExistingGroups mesti 0.',
+        changedExistingGroups: preview.changedExistingGroups
+      };
+    }
+
+    var previewCandidates = {};
+    (preview.genuinelyNewCandidates || []).forEach(function(candidate) {
+      var groupId = (candidate.paymentGroupId || '').toString().trim();
+      if (groupId) previewCandidates[groupId] = candidate;
+    });
+    var missingFromPreview = requestedGroupIds.filter(function(groupId) { return !previewCandidates[groupId]; });
+    if (missingFromPreview.length) {
+      return {
+        success: false,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        message: 'Catch-up dibatalkan: ID bukan lagi GENUINELY_NEW dalam preview semasa.',
+        missingFromPreview: missingFromPreview
+      };
+    }
+
+    var draft = buildEbayarImportRowsDryRunV2_({ sourceYear: 2026, includeDraftRows: true });
+    if (!draft || draft.success !== true) {
+      return {
+        success: false,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        message: draft && draft.message ? draft.message : 'Draft July 2026 gagal dibina.'
+      };
+    }
+
+    function mapKeys(map) {
+      return Object.keys(map || {}).sort();
+    }
+
+    var currentGroups = {};
+    (draft.draftRows || []).forEach(function(row) {
+      var sourceYear = parseInt(row.SOURCE_YEAR, 10);
+      var sourceSheet = (row.SOURCE_SHEET || '').toString().trim().toUpperCase();
+      var bulanKey = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN, row.BULAN || row.SOURCE_SHEET);
+      if (sourceYear !== 2026 || sourceSheet !== 'JULAI2026' || bulanKey !== '2026-07') return;
+
+      var groupId = makeImportPaymentGroupIdV2_(row);
+      if (!requestedIdSet[groupId]) return;
+      if (!currentGroups[groupId]) {
+        currentGroups[groupId] = {
+          paymentGroupId: groupId,
+          sourceYear: sourceYear,
+          sourceSheet: (row.SOURCE_SHEET || '').toString().trim(),
+          sourceRow: parseInt(row.SOURCE_ROW, 10),
+          rows: [],
+          hashes: {},
+          locations: {},
+          fingerprints: {},
+          amounts: {},
+          statuses: {},
+          normalizedNames: {},
+          paidNames: {}
+        };
+      }
+
+      var group = currentGroups[groupId];
+      var sourceRowText = isNaN(group.sourceRow) ? (row.SOURCE_ROW || '').toString().trim() : group.sourceRow.toString();
+      var location = makeEbayarSourceLocationKeyV2_(sourceYear, group.sourceSheet, sourceRowText);
+      var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+      var fingerprint = makeEbayarSourceContentFingerprintV2_(row);
+      var amount = parseEbayarAmountV2_(row.AMOUNT_TOTAL || row.JUMLAH);
+      var status = (row.STATUS || '').toString().trim().toUpperCase();
+      var name = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+
+      group.rows.push(row);
+      if (hash) group.hashes[hash] = true;
+      if (location) group.locations[location] = true;
+      if (fingerprint) group.fingerprints[fingerprint] = true;
+      if (typeof amount === 'number' && isFinite(amount)) group.amounts[amount.toFixed(2)] = true;
+      group.statuses[status || '(blank)'] = true;
+      if (name) group.normalizedNames[name] = true;
+      if ((!status || status === 'SELESAI') && name) group.paidNames[name] = true;
+    });
+
+    var draftValidationErrors = [];
+    requestedGroupIds.forEach(function(groupId) {
+      var group = currentGroups[groupId];
+      var previewCandidate = previewCandidates[groupId];
+      if (!group) {
+        draftValidationErrors.push({ paymentGroupId: groupId, reason: 'CURRENT_JULY_DRAFT_GROUP_MISSING' });
+        return;
+      }
+      var hashes = mapKeys(group.hashes);
+      var locations = mapKeys(group.locations);
+      var fingerprints = mapKeys(group.fingerprints);
+      var amounts = mapKeys(group.amounts);
+      if (hashes.length !== 1 || locations.length !== 1 || fingerprints.length !== 1 || amounts.length !== 1) {
+        draftValidationErrors.push({
+          paymentGroupId: groupId,
+          reason: 'CURRENT_JULY_DRAFT_GROUP_INCONSISTENT',
+          hashes: hashes,
+          locations: locations,
+          fingerprints: fingerprints,
+          amounts: amounts
+        });
+        return;
+      }
+      if (previewCandidate.sourceRowHash !== hashes[0] ||
+          (previewCandidate.contentFingerprints || []).indexOf(fingerprints[0]) === -1) {
+        draftValidationErrors.push({
+          paymentGroupId: groupId,
+          reason: 'CURRENT_DRAFT_CHANGED_AFTER_PREVIEW',
+          previewSourceRowHash: previewCandidate.sourceRowHash,
+          currentSourceRowHash: hashes[0],
+          currentContentFingerprint: fingerprints[0]
+        });
+      }
+    });
+    if (draftValidationErrors.length) {
+      return {
+        success: false,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        message: 'Catch-up dibatalkan: draft July semasa gagal validasi.',
+        conflicts: draftValidationErrors
+      };
+    }
+
+    var selectedDraftRows = [];
+    var uniquePaidNamesMap = {};
+    var totalAmount = 0;
+    requestedGroupIds.forEach(function(groupId) {
+      var group = currentGroups[groupId];
+      group.rows.forEach(function(row) { selectedDraftRows.push(row); });
+      mapKeys(group.paidNames).forEach(function(name) { uniquePaidNamesMap[name] = true; });
+      totalAmount += parseFloat(mapKeys(group.amounts)[0]);
+    });
+    var uniquePaidNames = mapKeys(uniquePaidNamesMap);
+    var firstSourceRow = requestedSourceRows[requestedGroupIds[0]];
+    var lastSourceRow = requestedSourceRows[requestedGroupIds[requestedGroupIds.length - 1]];
+
+    function recheckCurrentStaging() {
+      var staging = getPaymentsRowsV2_();
+      var existingGroupIds = {};
+      var existingLocations = {};
+      var existingHashes = {};
+      var existingFingerprints = {};
+
+      (staging.rows || []).forEach(function(row) {
+        var rawGroupId = (row.PAYMENT_GROUP_ID || '').toString().trim();
+        var groupId = rawGroupId ? makeImportPaymentGroupIdV2_({ PAYMENT_GROUP_ID: rawGroupId }) : '';
+        var sourceYear = (row.SOURCE_YEAR || '').toString().trim();
+        var sourceSheet = (row.SOURCE_SHEET || '').toString().trim();
+        var sourceRow = (row.SOURCE_ROW || '').toString().trim();
+        var location = makeEbayarSourceLocationKeyV2_(sourceYear, sourceSheet, sourceRow);
+        var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+        var fingerprint = makeEbayarSourceContentFingerprintV2_(row);
+        if (groupId) existingGroupIds[groupId] = true;
+        if (sourceYear && sourceSheet && sourceRow) existingLocations[location] = true;
+        if (hash) existingHashes[hash] = true;
+        if (fingerprint) existingFingerprints[fingerprint] = true;
+      });
+
+      var conflicts = [];
+      requestedGroupIds.forEach(function(groupId) {
+        var group = currentGroups[groupId];
+        var matchingKeys = [];
+        if (existingGroupIds[groupId]) matchingKeys.push('PAYMENT_GROUP_ID');
+        mapKeys(group.locations).forEach(function(location) {
+          if (existingLocations[location]) matchingKeys.push('SOURCE_LOCATION');
+        });
+        mapKeys(group.hashes).forEach(function(hash) {
+          if (existingHashes[hash]) matchingKeys.push('SOURCE_ROW_HASH');
+        });
+        mapKeys(group.fingerprints).forEach(function(fingerprint) {
+          if (existingFingerprints[fingerprint]) matchingKeys.push('SECONDARY_CONTENT_FINGERPRINT');
+        });
+        if (matchingKeys.length) {
+          conflicts.push({
+            paymentGroupId: groupId,
+            sourceYear: group.sourceYear,
+            sourceSheet: group.sourceSheet,
+            sourceRow: group.sourceRow,
+            sourceRowHashes: mapKeys(group.hashes),
+            sourceLocations: mapKeys(group.locations),
+            contentFingerprints: mapKeys(group.fingerprints),
+            matchingKeys: matchingKeys
+          });
+        }
+      });
+      return { conflicts: conflicts };
+    }
+
+    if (!allowWrite) {
+      var previewRecheck = recheckCurrentStaging();
+      if (previewRecheck.conflicts.length) {
+        return {
+          success: false,
+          mode: mode,
+          requestedGroupIds: requestedGroupIds,
+          message: 'Preview guarded gagal: konflik staging dijumpai.',
+          conflicts: previewRecheck.conflicts
+        };
+      }
+      return {
+        success: true,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        appendableGroups: requestedGroupIds.length,
+        projectedChildRows: selectedDraftRows.length,
+        projectedUniquePaidNames: uniquePaidNames,
+        projectedTotalAmount: totalAmount,
+        firstSourceRow: firstSourceRow,
+        lastSourceRow: lastSourceRow,
+        appendedGroups: 0,
+        appendedChildRows: 0,
+        appendedUniquePaidNames: [],
+        appendedTotalAmount: 0
+      };
+    }
+
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(30000)) {
+      return {
+        success: false,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        message: 'Catch-up dibatalkan: gagal mendapatkan script lock.'
+      };
+    }
+
+    try {
+      var ss = getEbayarMasterSpreadsheetForImportV2_();
+      var sheet = ss.getSheetByName(EBAYAR_PAYMENTS_TAB_V2);
+      if (!sheet) {
+        return { success: false, mode: mode, requestedGroupIds: requestedGroupIds, message: 'Payments tab tidak dijumpai.' };
+      }
+      var headerIndex = getPaymentsHeaderIndexV2_(sheet);
+      var requiredHeaders = [
+        'PAYMENT_ID', 'PAYMENT_GROUP_ID', 'SOURCE_YEAR', 'SOURCE_SHEET', 'SOURCE_ROW', 'SOURCE_ROW_HASH'
+      ];
+      var missingHeaders = requiredHeaders.filter(function(header) {
+        return headerIndex[header] === undefined || headerIndex[header] === null;
+      });
+      if (missingHeaders.length) {
+        return {
+          success: false,
+          mode: mode,
+          requestedGroupIds: requestedGroupIds,
+          message: 'Header Payments hilang.',
+          missingHeaders: missingHeaders
+        };
+      }
+
+      var freshDraft = buildEbayarImportRowsDryRunV2_({ sourceYear: 2026, includeDraftRows: true });
+      var sourceWindowConflicts = [];
+      var freshGroups = {};
+      if (!freshDraft || freshDraft.success !== true) {
+        sourceWindowConflicts.push({
+          reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+          detail: freshDraft && freshDraft.message ? freshDraft.message : 'Fresh post-lock draft gagal dibina.'
+        });
+      } else {
+        (freshDraft.draftRows || []).forEach(function(row) {
+          var sourceYear = parseInt(row.SOURCE_YEAR, 10);
+          var sourceSheet = (row.SOURCE_SHEET || '').toString().trim().toUpperCase();
+          var bulanKey = normalizeBulanKeyV2_(row.BULAN_KEY, row.TAHUN, row.BULAN || row.SOURCE_SHEET);
+          if (sourceYear !== 2026 || sourceSheet !== 'JULAI2026' || bulanKey !== '2026-07') return;
+
+          var groupId = makeImportPaymentGroupIdV2_(row);
+          if (!requestedIdSet[groupId]) return;
+          if (!freshGroups[groupId]) {
+            freshGroups[groupId] = {
+              paymentGroupId: groupId,
+              sourceYear: sourceYear,
+              sourceSheet: (row.SOURCE_SHEET || '').toString().trim(),
+              sourceRow: parseInt(row.SOURCE_ROW, 10),
+              rows: [],
+              hashes: {},
+              locations: {},
+              fingerprints: {},
+              amounts: {},
+              statuses: {},
+              normalizedNames: {},
+              paidNames: {}
+            };
+          }
+
+          var freshGroup = freshGroups[groupId];
+          var sourceRowText = isNaN(freshGroup.sourceRow)
+            ? (row.SOURCE_ROW || '').toString().trim()
+            : freshGroup.sourceRow.toString();
+          var location = makeEbayarSourceLocationKeyV2_(sourceYear, freshGroup.sourceSheet, sourceRowText);
+          var hash = (row.SOURCE_ROW_HASH || '').toString().trim();
+          var fingerprint = makeEbayarSourceContentFingerprintV2_(row);
+          var amount = parseEbayarAmountV2_(row.AMOUNT_TOTAL || row.JUMLAH);
+          var status = (row.STATUS || '').toString().trim().toUpperCase();
+          var name = normalizeYuranNameV2_(row.NAMA_MURID_NORM || row.NAMA_MURID_RAW);
+
+          freshGroup.rows.push(row);
+          if (hash) freshGroup.hashes[hash] = true;
+          if (location) freshGroup.locations[location] = true;
+          if (fingerprint) freshGroup.fingerprints[fingerprint] = true;
+          if (typeof amount === 'number' && isFinite(amount)) freshGroup.amounts[amount.toFixed(2)] = true;
+          freshGroup.statuses[status || '(blank)'] = true;
+          if (name) freshGroup.normalizedNames[name] = true;
+          if ((!status || status === 'SELESAI') && name) freshGroup.paidNames[name] = true;
+        });
+      }
+
+      function sameKeySet(left, right) {
+        var leftKeys = mapKeys(left);
+        var rightKeys = mapKeys(right);
+        return leftKeys.length === rightKeys.length && leftKeys.every(function(value, index) {
+          return value === rightKeys[index];
+        });
+      }
+
+      requestedGroupIds.forEach(function(groupId) {
+        var before = currentGroups[groupId];
+        var fresh = freshGroups[groupId];
+        if (!before || !fresh) {
+          sourceWindowConflicts.push({
+            paymentGroupId: groupId,
+            reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+            detail: !fresh ? 'REQUESTED_GROUP_MISSING_FROM_FRESH_DRAFT' : 'PRE_LOCK_GROUP_MISSING'
+          });
+          return;
+        }
+
+        var freshValid = mapKeys(fresh.hashes).length === 1 &&
+          mapKeys(fresh.locations).length === 1 &&
+          mapKeys(fresh.fingerprints).length === 1 &&
+          mapKeys(fresh.amounts).length === 1 &&
+          fresh.rows.length > 0;
+        var differences = [];
+        if (!freshValid) differences.push('FRESH_GROUP_INVALID');
+        if (!sameKeySet(before.hashes, fresh.hashes)) differences.push('SOURCE_ROW_HASH');
+        if (!sameKeySet(before.locations, fresh.locations)) differences.push('SOURCE_LOCATION');
+        if (!sameKeySet(before.fingerprints, fresh.fingerprints)) differences.push('SECONDARY_CONTENT_FINGERPRINT');
+        if (before.rows.length !== fresh.rows.length) differences.push('CHILD_ROW_COUNT');
+        if (!sameKeySet(before.amounts, fresh.amounts)) differences.push('AMOUNT');
+        if (!sameKeySet(before.statuses, fresh.statuses)) differences.push('STATUS_SET');
+        if (!sameKeySet(before.normalizedNames, fresh.normalizedNames)) differences.push('NORMALIZED_NAME_SET');
+
+        if (differences.length) {
+          sourceWindowConflicts.push({
+            paymentGroupId: groupId,
+            reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+            differences: differences,
+            before: {
+              sourceRowHashes: mapKeys(before.hashes),
+              sourceLocations: mapKeys(before.locations),
+              contentFingerprints: mapKeys(before.fingerprints),
+              childRows: before.rows.length,
+              amounts: mapKeys(before.amounts),
+              statuses: mapKeys(before.statuses),
+              normalizedNames: mapKeys(before.normalizedNames)
+            },
+            fresh: {
+              sourceRowHashes: mapKeys(fresh.hashes),
+              sourceLocations: mapKeys(fresh.locations),
+              contentFingerprints: mapKeys(fresh.fingerprints),
+              childRows: fresh.rows.length,
+              amounts: mapKeys(fresh.amounts),
+              statuses: mapKeys(fresh.statuses),
+              normalizedNames: mapKeys(fresh.normalizedNames)
+            }
+          });
+        }
+      });
+
+      if (Object.keys(freshGroups).length !== requestedGroupIds.length) {
+        sourceWindowConflicts.push({
+          reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+          detail: 'FRESH_GROUP_COUNT_MISMATCH',
+          requestedGroupCount: requestedGroupIds.length,
+          freshGroupCount: Object.keys(freshGroups).length
+        });
+      }
+
+      var freshSelectedDraftRows = [];
+      var freshUniquePaidNamesMap = {};
+      var freshTotalAmount = 0;
+      requestedGroupIds.forEach(function(groupId) {
+        var fresh = freshGroups[groupId];
+        if (!fresh) return;
+        fresh.rows.forEach(function(row) { freshSelectedDraftRows.push(row); });
+        mapKeys(fresh.paidNames).forEach(function(name) { freshUniquePaidNamesMap[name] = true; });
+        var amountKeys = mapKeys(fresh.amounts);
+        if (amountKeys.length === 1) freshTotalAmount += parseFloat(amountKeys[0]);
+      });
+      if (!freshSelectedDraftRows.length || Object.keys(freshGroups).length !== requestedGroupIds.length) {
+        sourceWindowConflicts.push({
+          reason: 'SOURCE_CHANGED_DURING_WRITE_WINDOW',
+          detail: 'FRESH_SELECTED_ROWS_EMPTY_OR_GROUP_COUNT_MISMATCH',
+          freshSelectedChildRows: freshSelectedDraftRows.length,
+          requestedGroupCount: requestedGroupIds.length,
+          freshGroupCount: Object.keys(freshGroups).length
+        });
+      }
+
+      if (sourceWindowConflicts.length) {
+        return {
+          success: false,
+          mode: mode,
+          requestedGroupIds: requestedGroupIds,
+          message: 'Catch-up dibatalkan sepenuhnya: sumber July berubah semasa write window.',
+          conflicts: sourceWindowConflicts,
+          appendedGroups: 0,
+          appendedChildRows: 0
+        };
+      }
+
+      currentGroups = freshGroups;
+      selectedDraftRows = freshSelectedDraftRows;
+      uniquePaidNames = mapKeys(freshUniquePaidNamesMap);
+      totalAmount = freshTotalAmount;
+
+      var finalRecheck = recheckCurrentStaging();
+      if (finalRecheck.conflicts.length) {
+        return {
+          success: false,
+          mode: mode,
+          requestedGroupIds: requestedGroupIds,
+          message: 'Catch-up dibatalkan sepenuhnya: konflik staging dijumpai semasa final recheck.',
+          conflicts: finalRecheck.conflicts,
+          appendedGroups: 0,
+          appendedChildRows: 0
+        };
+      }
+
+      var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(function(header) {
+        return (header || '').toString().trim();
+      });
+      var timestampNow = Utilities.formatDate(new Date(), 'Asia/Kuala_Lumpur', 'yyyy-MM-dd HH:mm:ss');
+      var rowsToAppend = selectedDraftRows.map(function(row) {
+        return mapDraftPaymentToMasterRowV2_(row, headerIndex, headers, timestampNow);
+      });
+      sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, headers.length).setValues(rowsToAppend);
+
+      return {
+        success: true,
+        mode: mode,
+        requestedGroupIds: requestedGroupIds,
+        appendedGroups: requestedGroupIds.length,
+        appendedChildRows: rowsToAppend.length,
+        appendedUniquePaidNames: uniquePaidNames,
+        appendedTotalAmount: totalAmount,
+        firstSourceRow: firstSourceRow,
+        lastSourceRow: lastSourceRow
+      };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    Logger.log('importJuly2026CatchupGuardedV2 error: ' + err.message);
+    return { success: false, mode: mode, message: err.message };
+  }
+}
+
+function testImportJuly2026CatchupBatch1PreviewV2() {
+  var paymentGroupIds = [];
+  for (var sourceRow = 34; sourceRow <= 58; sourceRow++) {
+    paymentGroupIds.push('PG-2026-JULAI2026-' + sourceRow);
+  }
+  var result = importJuly2026CatchupGuardedV2({ paymentGroupIds: paymentGroupIds, allowWrite: false });
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function testImportJuly2026CatchupBatch2PreviewV2() {
+  var paymentGroupIds = [];
+  for (var sourceRow = 59; sourceRow <= 72; sourceRow++) {
+    paymentGroupIds.push('PG-2026-JULAI2026-' + sourceRow);
+  }
+  var result = importJuly2026CatchupGuardedV2({ paymentGroupIds: paymentGroupIds, allowWrite: false });
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function testImportJuly2026CatchupBatch1WriteV2() {
+  var paymentGroupIds = [];
+  for (var sourceRow = 34; sourceRow <= 58; sourceRow++) {
+    paymentGroupIds.push('PG-2026-JULAI2026-' + sourceRow);
+  }
+  var result = importJuly2026CatchupGuardedV2({ paymentGroupIds: paymentGroupIds, allowWrite: true });
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function testImportJuly2026CatchupBatch2WriteV2() {
+  var paymentGroupIds = [];
+  for (var sourceRow = 59; sourceRow <= 72; sourceRow++) {
+    paymentGroupIds.push('PG-2026-JULAI2026-' + sourceRow);
+  }
+  var result = importJuly2026CatchupGuardedV2({ paymentGroupIds: paymentGroupIds, allowWrite: true });
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function runJulyCatchupBatch2SafeV2() {
+  var paymentGroupIds = [];
+  for (var sourceRow = 59; sourceRow <= 72; sourceRow++) {
+    paymentGroupIds.push('PG-2026-JULAI2026-' + sourceRow);
+  }
+
+  var previewBefore = importJuly2026CatchupGuardedV2({
+    paymentGroupIds: paymentGroupIds,
+    allowWrite: false
+  });
+  var previewMatches = previewBefore &&
+    previewBefore.success === true &&
+    previewBefore.appendableGroups === 14 &&
+    previewBefore.projectedChildRows === 23 &&
+    previewBefore.projectedTotalAmount === 720 &&
+    previewBefore.firstSourceRow === 59 &&
+    previewBefore.lastSourceRow === 72 &&
+    previewBefore.appendedGroups === 0 &&
+    previewBefore.appendedChildRows === 0;
+
+  if (!previewMatches) {
+    var previewFailure = {
+      success: false,
+      mode: 'V2_JULY_BATCH2_ONE_CLICK_ABORTED',
+      preview: previewBefore,
+      reason: 'PREVIEW_VALUES_DO_NOT_MATCH_EXPECTED_BATCH2'
+    };
+    Logger.log(JSON.stringify(previewFailure));
+    return previewFailure;
+  }
+
+  var writeResult = importJuly2026CatchupGuardedV2({
+    paymentGroupIds: paymentGroupIds,
+    allowWrite: true
+  });
+  var writeMatches = writeResult &&
+    writeResult.success === true &&
+    writeResult.appendedGroups === 14 &&
+    writeResult.appendedChildRows === 23 &&
+    writeResult.appendedTotalAmount === 720 &&
+    writeResult.firstSourceRow === 59 &&
+    writeResult.lastSourceRow === 72;
+
+  if (!writeMatches) {
+    var writeFailure = {
+      success: false,
+      mode: 'V2_JULY_BATCH2_ONE_CLICK_WRITE_FAILED',
+      previewBefore: previewBefore,
+      writeResult: writeResult,
+      postWrite: null
+    };
+    Logger.log(JSON.stringify(writeFailure));
+    return writeFailure;
+  }
+
+  var postWriteResult = previewJuly2026CatchupV2();
+  var postWrite = {
+    success: postWriteResult && postWriteResult.success,
+    sourceGroupsScanned: postWriteResult && postWriteResult.sourceGroupsScanned,
+    existingUnchangedGroups: postWriteResult && postWriteResult.existingUnchangedGroups,
+    changedExistingGroups: postWriteResult && postWriteResult.changedExistingGroups,
+    genuinelyNewGroups: postWriteResult && postWriteResult.genuinelyNewGroups,
+    projectedChildRows: postWriteResult && postWriteResult.projectedChildRows,
+    projectedTotalAmount: postWriteResult && postWriteResult.projectedTotalAmount,
+    highestExistingJulySourceRow: postWriteResult && postWriteResult.highestExistingJulySourceRow,
+    anomalyCount: postWriteResult && Array.isArray(postWriteResult.anomalies)
+      ? postWriteResult.anomalies.length
+      : 0
+  };
+  var finalSuccess = postWrite.success === true &&
+    postWrite.genuinelyNewGroups === 0 &&
+    postWrite.projectedChildRows === 0 &&
+    postWrite.projectedTotalAmount === 0 &&
+    postWrite.changedExistingGroups === 0;
+  var output = {
+    success: finalSuccess,
+    mode: finalSuccess
+      ? 'V2_JULY_BATCH2_ONE_CLICK_COMPLETED'
+      : 'V2_JULY_BATCH2_ONE_CLICK_POST_WRITE_VERIFICATION_FAILED',
+    previewBefore: previewBefore,
+    writeResult: writeResult,
+    postWrite: postWrite
+  };
+  Logger.log(JSON.stringify(output));
+  return output;
+}
+
 function getPaymentsHeaderIndexV2_(sheet) {
   if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return {};
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
@@ -3190,7 +4456,7 @@ function getMonthlyPaymentSummaryV2(params) {
   params = params || {};
   try {
     var tahun = (params.tahun || '').toString().replace(/[^0-9]/g, '');
-    var bulanKeyFilter = params.bulanKey || makeBulanKeyV2_(tahun, params.bulan || params.bulanKey);
+    var bulanKeyFilter = normalizeBulanKeyV2_(params.bulanKey, tahun, params.bulan || params.bulanKey);
     var data = getPaymentsRowsV2_();
     var byMonth = {};
 
@@ -3239,7 +4505,7 @@ function getYuranStatsV2(params) {
   params = params || {};
   try {
     var tahun = (params.tahun || '').toString().replace(/[^0-9]/g, '') || '2026';
-    var bulanKey = params.bulanKey || makeBulanKeyV2_(tahun, params.bulan || '');
+    var bulanKey = normalizeBulanKeyV2_(params.bulanKey, tahun, params.bulan || params.bulanKey);
     if (!bulanKey) return { success: false, message: 'Parameter bulan atau bulanKey diperlukan.' };
 
     var data = getPaymentsRowsV2_();
@@ -3340,7 +4606,7 @@ function compareYuranLegacyVsV2(params) {
   try {
     var tahun = (params.tahun || '').toString().replace(/[^0-9]/g, '') || '2026';
     var bulan = (params.bulan || '').toString().trim().toUpperCase();
-    var bulanKey = params.bulanKey || makeBulanKeyV2_(tahun, bulan);
+    var bulanKey = normalizeBulanKeyV2_(params.bulanKey, tahun, bulan || params.bulanKey);
     var meta = getMonthMetaV2_(bulanKey);
     if (!meta) return { success: false, message: 'Bulan tidak dikenali.' };
     var legacyBulan = bulan || meta.legacy.replace('2026', tahun);
@@ -3387,6 +4653,114 @@ function compareYuranLegacyVsV2(params) {
     Logger.log('compareYuranLegacyVsV2 error: ' + err.message);
     return { success: false, message: err.message };
   }
+}
+
+function testCompareYuranLegacyVsV2() {
+  var tests = [
+    { tahun: 2026, bulanKey: '2026-01' },
+    { tahun: 2026, bulanKey: '2026-02' },
+    { tahun: 2026, bulanKey: '2026-03' },
+    { tahun: 2026, bulanKey: '2026-04' },
+    { tahun: 2026, bulanKey: '2026-05' },
+    { tahun: 2026, bulanKey: '2026-06' },
+    { tahun: 2026, bulanKey: '2026-07' }
+  ];
+
+  tests.forEach(function(t) {
+    var result = compareYuranLegacyVsV2(t);
+    Logger.log(t.bulanKey + ': ' + JSON.stringify(result));
+  });
+}
+
+function testMonthlyPaymentSummaryV2() {
+  var r = getMonthlyPaymentSummaryV2({});
+  Logger.log(JSON.stringify(r));
+}
+
+function testSamplePaymentsV2() {
+  var data = getPaymentsRowsV2_();
+
+  Logger.log('ROW COUNT: ' + data.rows.length);
+  Logger.log('HEADERS: ' + JSON.stringify(data.headers));
+
+  for (var i = 0; i < Math.min(5, data.rows.length); i++) {
+    Logger.log('ROW ' + (i + 2) + ': ' + JSON.stringify(data.rows[i]));
+  }
+}
+
+function testNormalizeBulanKeyV2() {
+  var cases = [
+    { name: 'canonical', actual: normalizeBulanKeyV2_('2026-01', '', ''), expected: '2026-01' },
+    { name: 'date_asia_singapore', actual: normalizeBulanKeyV2_(new Date('2025-12-31T16:00:00.000Z'), '', ''), expected: '2026-01' },
+    { name: 'fallback_blank', actual: normalizeBulanKeyV2_('', '2026', 'JANUARI'), expected: '2026-01' },
+    { name: 'fallback_invalid_month', actual: normalizeBulanKeyV2_('2026-13', '2026', 'JANUARI'), expected: '2026-01' },
+    { name: 'reject_invalid_month', actual: normalizeBulanKeyV2_('2026-00', '', ''), expected: '' }
+  ];
+  cases.forEach(function(testCase) {
+    testCase.passed = testCase.actual === testCase.expected;
+  });
+  var result = {
+    success: cases.every(function(testCase) { return testCase.passed; }),
+    mode: 'V2_BULAN_KEY_PURE_REGRESSION',
+    cases: cases
+  };
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function testMonthlyPaymentSummaryBulanKeyV2() {
+  var summary = getMonthlyPaymentSummaryV2({ tahun: '2026' });
+  if (!summary || !summary.success) return summary;
+
+  var canonicalPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
+  var invalidBulanKeys = (summary.summaries || [])
+    .filter(function(item) { return !canonicalPattern.test((item.bulanKey || '').toString()); })
+    .map(function(item) { return item.bulanKey; });
+  var january = (summary.summaries || []).filter(function(item) {
+    return item.bulanKey === '2026-01';
+  })[0] || null;
+  var januaryMatches = !!january && january.selesai === 107 && Math.abs(january.totalKutipan - 3860) < 0.001;
+  var result = {
+    success: invalidBulanKeys.length === 0 && januaryMatches,
+    mode: 'V2_BULAN_KEY_SUMMARY_REGRESSION_READ_ONLY',
+    invalidBulanKeys: invalidBulanKeys,
+    january: january,
+    expectedJanuary: { selesai: 107, totalKutipan: 3860 }
+  };
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+function testCompareYuranLegacyVsV2JanJun2026() {
+  var expected = [
+    { bulan: 'JAN2026', bulanKey: '2026-01', sudahBayar: 107, totalKutipan: 3860 },
+    { bulan: 'FEB2026', bulanKey: '2026-02', sudahBayar: 114, totalKutipan: 3840 },
+    { bulan: 'MAC2026', bulanKey: '2026-03', sudahBayar: 110, totalKutipan: 3630 },
+    { bulan: 'APRIL2026', bulanKey: '2026-04', sudahBayar: 112, totalKutipan: 3680 },
+    { bulan: 'MEI2026', bulanKey: '2026-05', sudahBayar: 117, totalKutipan: 4020 },
+    { bulan: 'JUN2026', bulanKey: '2026-06', sudahBayar: 172, totalKutipan: 5780 }
+  ];
+  var results = expected.map(function(item) {
+    var comparison = compareYuranLegacyVsV2({ tahun: '2026', bulan: item.bulan, bulanKey: item.bulanKey });
+    var passed = !!comparison && comparison.success &&
+      comparison.v2.sudahBayar === item.sudahBayar &&
+      Math.abs(comparison.v2.totalKutipan - item.totalKutipan) < 0.001 &&
+      comparison.diff.sudahBayar === 0 &&
+      Math.abs(comparison.diff.totalKutipan) < 0.001;
+    return {
+      bulanKey: item.bulanKey,
+      passed: passed,
+      expected: { sudahBayar: item.sudahBayar, totalKutipan: item.totalKutipan },
+      comparison: comparison
+    };
+  });
+  var result = {
+    success: results.every(function(item) { return item.passed; }),
+    mode: 'V2_JAN_JUN_COMPARE_REGRESSION_READ_ONLY',
+    results: results
+  };
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
 function getYuranStats(params) {
