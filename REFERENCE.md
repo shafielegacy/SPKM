@@ -2,15 +2,17 @@
 
 Rujukan pantas semua akaun, ID, URL, dan langkah deploy untuk projek SPKM (Sistem Pengurusan Kelas Mengaji — Syafie Legacy). Kemaskini fail ni bila ada perubahan struktur.
 
+> **Checkpoint berkuat kuasa: 16 Ogos 2026.** HEAD, kedua-dua remote dan GitHub Pages berada pada `612128e`. Apps Script editor/source Phase 2B telah dipush, tetapi existing active production Web App belum ditetapkan kepada versi yang mengandungi Phase 2A/2B dan tiada transaksi Native sebenar pernah dijalankan. Lihat `CURRENT_STATUS.md` untuk handoff penuh. Nota import bertarikh 1–2 Julai di bahagian bawah ialah rekod sejarah dan tidak mengatasi checkpoint ini.
+
 ---
 
 ## 📁 Local Project
 
 ```
-Path: D:\OneDrive\Documents-assets\SPKM
+Path: C:\Users\burnk\OneDrive\Documents-assets\SPKM
 ```
 
-⚠️ **Path berubah 16 Jul 2026** (sebelum ni `C:\Users\burnk\OneDrive\Documents-assets\SPKM`). Folder lama dengan nama sama pernah jadi **corrupt di peringkat `.git`** (satu blob hilang dalam sejarah, lihat "Git Repo Corruption" di bawah) — direname `SPKM_OLD_CORRUPT` (backup, jangan padam dulu). Folder aktif sekarang ialah bekas clone fresh yang direname semula jadi `SPKM`.
+Folder aktif yang disahkan untuk checkpoint ini ialah path di atas. Insiden repository corrupt pada 16 Julai kekal direkodkan di bahagian "Git Repo Corruption" sebagai amaran sejarah; jangan anggap path pada mesin lain sebagai workspace aktif tanpa menyemaknya sendiri.
 
 ---
 
@@ -58,11 +60,16 @@ Lepas tu push semula, login sebagai `BurnDVS` bila diminta.
 
 🌐 **Live URL:** `https://shafielegacy.github.io/SPKM`
 
-### Deploy command (standard)
+### Aliran push yang selamat
 ```powershell
-git add . && git commit -m "message" && git push && git push pages main
+git status --short
+git fetch origin
+git fetch pages
+git log --oneline --left-right origin/main...main
+git log --oneline --left-right pages/main...main
 ```
-⚠️ Kena push **DUA-DUA remote** setiap kali — kalau hanya `origin`, website live TAK update.
+
+Stage hanya fail yang memang berada dalam skop; jangan guna `git add .` secara automatik. Push development dengan `git push origin main`. Push production Pages secara berasingan dengan `git push pages main:main` hanya selepas divergence disemak dan fast-forward disahkan selamat. Push ke `origin` sahaja tidak mengemas kini website live.
 
 ⚠️ **Sebelum push ke `pages`, semak dulu fail apa yang akan terpush** (kalau ada kerja WIP yang belum siap dalam commit lain):
 ```powershell
@@ -122,17 +129,19 @@ Project ni sengaja diletak dalam OneDrive-synced folder (`D:\OneDrive\...` di de
 | Owner akaun | `shafielegacykelasmengaji@gmail.com` |
 | Buka editor | `clasp open` atau `https://script.google.com/d/1kYWTdqLEhGQbMZIuA2F5N-Z_VNVYGFYYROn16vVkg-6iS1ozJkllUgoW/edit` |
 
-### 🚨 LANGKAH WAJIB lepas `clasp push`
-`clasp push` HANYA update source code dalam editor — **TIDAK** update web app URL yang live (`config.json` → `gasUrl`).
+`.clasp` tracks exactly `appsscript.json`, `Code.js`, `portal.html` dan `TestWA.js`. Phase 2B source berjaya dipush pada 16 Ogos 2026 sekitar 00:26:45, tetapi production web-app deployment belum dikemas kini.
 
-Untuk apply kod baru ke production:
+### 🚨 LANGKAH WAJIB lepas `clasp push`
+`clasp push` HANYA update editor/source Apps Script — ia **TIDAK** mengubah production behavior dan **TIDAK** menukar URL Web App production.
+
+Untuk apply kod baru ke production selepas `/dev` diluluskan secara eksplisit:
 1. Buka GAS editor (`clasp open`)
 2. **Deploy** → **Manage deployments**
 3. Klik ikon pensel (Edit) pada deployment "Web app" yang aktif
 4. Version → **New version**
 5. **Deploy**
 
-Tanpa langkah ni, perubahan Code.js TIDAK akan nampak kesan di portal walaupun push berjaya.
+Ini mengemas kini existing active Web App deployment kepada versi source baharu sambil mengekalkan URL production yang sama. Jangan gunakan **New deployment** kecuali deployment berasingan memang dimaksudkan. Tanpa langkah ini, perubahan source tidak akan mempengaruhi production walaupun `clasp push` berjaya.
 
 ---
 
@@ -142,13 +151,33 @@ Tanpa langkah ni, perubahan Code.js TIDAK akan nampak kesan di portal walaupun p
 |---|---|---|
 | SPKM Main DB (+ eBayar 2025) | `1QUlrgUeuVI0AVkid1LqXqL7-aQnRHh0ciYXxuhq6otU` | **Satu fail multi-purpose**: Maklumat Guru, PendaftaranBaru, KelasDewasa, Kehadiran (Fasa 1 data) **DAN** tab eBayar 2025 (Mei–Dis) — sebab semua pendaftaran murid baru (kanak-kanak & dewasa) masuk sini, jadi data yuran 2025 sekali dalam fail ni. Tab `LogPertukaranGuru` (ditambah 30 Jun 2026) — log audit Pertukaran Guru, 7 kolum: `Timestamp \| Admin \| Guru Lama \| Guru Baru \| Nama Murid \| Jenis Murid \| Bil` |
 | eBayar 2026 (Jan–present) — `YURAN_SS_ID` | `1AUH-ZwrbDjB5l2J5H8t2MBlbzkITMJp66J2VDLZF9CM` | Tab per bulan (JAN2026...DIS2026), NAMA MURID, Calculation* |
-| eBayar Master V2 — `EBAYAR_MASTER_SS_ID` | Script Property, belum live | Staging/shadow spreadsheet: `SPKM eBayar Master`. Canonical tab: `Payments`. Backend V2 sudah ada dalam `Code.js`, tetapi UI/live flow masih legacy. |
+| eBayar Master V2 — `EBAYAR_MASTER_SS_ID` | Script Property | Canonical `Payments` table. Migrasi/reconciliation Januari–Ogos 2026 selesai; Native production cutover masih belum selesai. |
 | Kehadiran — `KEHADIRAN_SS_ID` | `1qez9OLXmJuU0nFCBnbuZqjc_DnTJh7kMElqCRnxK7F4` | Satu tab per guru, scan via `cariTabGuru()`. Tab kini boleh ada 9 kolum (A–G original + H=`Guru Tetap`, I=`Guru Hadir`, ditambah 30 Jun 2026 untuk sokongan relief/backup guru). Tab lama auto-upgrade header H/I bila pertama kali terima rekod relief; data sedia ada (sebelum upgrade) kosong untuk 2 kolum ni — itu normal. |
 | Sijil Khatam | `1jGp9U6lYRBvAVPSHhqSLv2WL5MHxdmKP5f5AnTHC8xU` | Tab "Khatam Iqra'" + "Khatam Quran" |
 
-### eBayar Master / Yuran V2 Shadow Note
+### eBayar Master / Native eBayar — Current Checkpoint
 
-- Queue #9 foundation is backend-only and not live. `getYuranStats`, `getYuranParent`, `getEbayarStats`, `recordCash`, sync functions, and `YURAN_SS_ID` flow remain legacy.
+- Januari–Ogos 2026 kekal legacy-only. Native eBayar bermula September 2026.
+- Migrasi/reconciliation V2 Januari–Ogos selesai. Ogos: 68 paid, 117 unpaid, 185 total dan RM2,520; semua diffs legacy/V2 sifar.
+- Julai catch-up: 39 groups, 60 child rows, RM1,870. Ogos: 46 groups, 69 child rows, RM2,520 melalui source row 47.
+- Satu anomali sejarah kekal: `GROUP_ID_MULTIPLE_STAGED_HASHES` pada `PG-2026-JUN2026-112`; tidak berkaitan catch-up Julai/Ogos.
+- Portal Mode: `AUTO`, `LEGACY`, `NATIVE`, `BOTH`; property `EBAYAR_PORTAL_MODE`, fallback `AUTO`, cutoff `2026-09-01` MYT. Audit menggunakan `EBAYAR_PORTAL_MODE_UPDATED_AT` dan `EBAYAR_PORTAL_MODE_UPDATED_BY`.
+- Native identity: `KANAK:<BIL>` / `DEWASA:<BIL>`. MyKid/MyKad tidak digunakan sebagai public selector. Native duplicate check menggunakan `STUDENT_ID`; historical blank IDs menggunakan conservative normalized-name fallback.
+- Phase 2A (`d171e8c`) menggunakan duplicate recheck di bawah lock, satu bulk write, slip validation maksimum 3 MB, cleanup dan post-write verification.
+- Phase 2B (`612128e`) menghasilkan maksimum satu receipt PDF per group secara idempotent, dengan lock berasingan dan satu `RESIT_URL` dikongsi semua child rows.
+- `NATIVE_EBAYAR_SLIP_FOLDER_ID`: semak configured value dalam Apps Script Script Properties. Folder `SPKM - Native eBayar Slips` wajib private/restricted dan tidak boleh link-share.
+- `NATIVE_EBAYAR_RECEIPT_FOLDER_ID`: semak configured value dalam Apps Script Script Properties. Folder `SPKM - Native eBayar Receipts` sebaiknya Restricted; hanya final PDF boleh anyone-with-link/view.
+- Apps Script editor/source telah dipush tetapi existing active production Web App belum ditetapkan kepada versi Phase 2A/2B. Tiada real Native write, upload atau receipt test.
+
+Schema `Payments`:
+
+`PAYMENT_ID`, `PAYMENT_GROUP_ID`, `TIMESTAMP`, `TAHUN`, `BULAN`, `BULAN_KEY`, `NAMA_MURID_RAW`, `NAMA_MURID_NORM`, `STUDENT_ID`, `NO_MYKID_MYKAD`, `STUDENT_TYPE`, `JUMLAH`, `AMOUNT_TOTAL`, `AMOUNT_ALLOCATED`, `STATUS`, `KAEDAH`, `RESIT_URL`, `SOURCE_YEAR`, `SOURCE_SHEET`, `SOURCE_ROW`, `SOURCE_ROW_HASH`, `MATCH_STATUS`, `MATCH_CONFIDENCE`, `NOTE`, `CREATED_AT`, `UPDATED_AT`.
+
+### Historical Queue #9 Foundation — Superseded Status
+
+The following notes preserve the initial 1 July staging foundation. Their progress totals and "next steps" are historical; use the current checkpoint above for present state.
+
+- Queue #9 foundation began as backend-only shadow work. The original legacy functions were kept during that initial phase.
 - Script Property: `EBAYAR_MASTER_SS_ID` — set successfully on 1 Jul 2026.
 - Staging spreadsheet name: `SPKM eBayar Master` — created on 1 Jul 2026.
 - Canonical tab: `Payments`, one table for all years.
@@ -274,9 +303,9 @@ Pattern yang digunakan:
 | 6 | Pecah Code.js multi-file | QUEUE |
 | 7 | Sijil Khatam panel | ✅ Selesai |
 | 8 | Laporan Tahunan | QUEUE |
-| 9 | Satukan eBayar 2025+2026 → tab per tahun | QUEUE |
-| 10 | Dashboard Analisa Yuran | QUEUE (depends on #9) |
-| 11 | eSemak upgrade utk spreadsheet baru | QUEUE (depends on #9) |
+| 9 | Canonical eBayar Master + migrasi sejarah Januari–Ogos 2026 | ✅ Selesai dan reconcile |
+| 10 | Dashboard Analisa Yuran | V2 readers/maintenance tersedia; production Native cutover belum selesai |
+| 11 | eSemak upgrade utk spreadsheet baru | V2 read path tersedia; production Native cutover belum selesai |
 | 12 | Murid Tanpa Guru — assign guru pukal (page Kehadiran) | ✅ Selesai (16 Jul 2026) |
 | 13 | Statistik Kehadiran admin view — guru lookup gap (`getKehadiranStats` hardcode `guru:''` untuk admin branch) | QUEUE — prompt dah dihantar, belum verify/deploy |
 | 14 | Normalize double-whitespace nama murid (`KEHADIRAN_SS_ID`) | QUEUE |
@@ -327,7 +356,7 @@ Pattern yang digunakan:
   cmdkey /delete:LegacyGeneric:target=git:https://github.com
   ```
   Lepas tu `git push origin main` semula, login sebagai `BurnDVS` bila diminta.
-- **Status semasa (30 Jun 2026):** `origin` tertinggal commit `f588c57` — perlu sync bila credential BurnDVS tersedia.
+- **Status checkpoint 16 Ogos 2026:** isu ini ialah rekod sejarah. `origin` dan `pages` telah diselaraskan pada `612128e`; semak semula kedua-dua remote sebelum push seterusnya.
 
 ---
 
@@ -337,7 +366,11 @@ Pattern yang digunakan:
 
 ---
 
-*Last updated: 30 Jun 2026 (Guru Backup/Relief + Pertukaran Guru + Known Issues Tooling)*
+*Last updated: 16 Ogos 2026 (current deployment, eBayar V2, Portal Mode, Native Phase 2A/2B; older queue logs below are historical)*
+## Historical Archive — Queue #9 Staging Logs
+
+Semua seksyen di bawah ialah log progres 1–2 Julai 2026. Ia dikekalkan untuk audit tetapi telah digantikan oleh status migrasi/reconciliation Januari–Ogos dalam `CURRENT_STATUS.md`.
+
 ## Queue #9 eBayar V2 Staging Import Checkpoint Correction — 1 Jul 2026
 
 - Fourth staging import batch completed for 2026 using `skipExistingGroupsFirst:true`.

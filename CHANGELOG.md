@@ -4,6 +4,71 @@ Semua perubahan utama sistem direkodkan di sini.
 
 ---
 
+## [15–16 Ogos 2026] — Checkpoint: Native eBayar Phase 2A/2B dan kesinambungan operasi
+
+### Completed
+
+- Migrasi dan reconciliation eBayar V2 Januari–Ogos 2026 selesai. Januari–Julai sepadan tepat; Ogos disahkan pada 68 paid, 117 unpaid, 185 total murid dan RM2,520 dengan semua perbezaan legacy/V2 sifar.
+- Catch-up Julai menambah 39 source groups, 60 child rows dan RM1,870. Catch-up Ogos hingga source row 47 merangkumi 46 groups, 69 child rows dan RM2,520.
+- Portal Mode `AUTO`, `LEGACY`, `NATIVE` dan `BOTH` siap dengan konfigurasi backend dan authorization admin. `AUTO` kekal legacy sebelum 1 September 2026 dan bertukar Native mulai tarikh itu.
+- Panel maintenance V2 admin-only dan guarded current-month Auto Sync siap dengan read-only default, maksimum 25 groups, source/staging recheck, ScriptLock, TOCTOU validation, satu bulk write dan post-write verification.
+- Legacy future-month cards dikekalkan sebagai `Akan Datang`, tetapi payment links disabled sehingga bulan berkenaan tiba.
+- Native eBayar Phase 2A siap pada `d171e8c`: stable student identity, 1–5 murid, duplicate guard, file validation/cap, ScriptLock, satu bulk payment write, cleanup dan post-write verification.
+- Native eBayar Phase 2B siap pada `612128e`: receipt snapshot, satu PDF per group, idempotency, lock berasingan, satu URL untuk semua child rows dan privacy-safe receipt content.
+- GitHub Pages `pages` dan development remote `origin` diselaraskan pada `612128e`. Public PWA telah disahkan kekal legacy-safe dalam mode `AUTO` pada 16 Ogos 2026.
+- Apps Script source Phase 2B dipush melalui clasp pada 16 Ogos 2026 sekitar 00:26:45.
+- Public PWA safety snapshot selepas Pages update: legacy flow masih dipaparkan, Ogos current, September–Disember `Akan Datang`, Native tersembunyi dalam `AUTO`; dashboard Ogos menunjukkan 68 paid, 117 unpaid dan RM2,520.
+
+### Commits
+
+- `f0af240` — `feat: complete ebayar v2 july migration validation`
+- `acfaafa` — `feat: add ebayar v2 admin maintenance panel`
+- `da0b6df` — `feat: add guarded ebayar v2 auto sync`
+- `d171e8c` — `feat: add guarded native ebayar phase 2a`
+- `612128e` — `feat: add native ebayar receipt generation`
+
+### Safety Boundary
+
+- Januari–Ogos 2026 kekal legacy-only; Native eBayar bermula September 2026.
+- Existing active production Web App deployment belum ditetapkan kepada versi yang mengandungi source Phase 2A/2B; URL production sedia ada perlu dikekalkan.
+- Tiada real Native payment write, slip upload atau receipt generation pernah dijalankan.
+- Ujian `/dev` dengan mode `BOTH` hanya mengesahkan UI; September kekal disabled ketika Ogos. Mode telah dipulihkan ke `AUTO`.
+- Satu anomali sejarah Jun kekal: `GROUP_ID_MULTIPLE_STAGED_HASHES` untuk `PG-2026-JUN2026-112`; disahkan tidak berkaitan dengan catch-up Julai/Ogos.
+
+### Next
+
+- Jalankan satu transaksi Native terkawal pada atau selepas September melalui `/dev`, sahkan payment rows, privacy slip, receipt PDF dan idempotency.
+- Hanya selepas kelulusan `/dev`, edit existing active GAS Web App deployment dan tetapkan `New version` sambil mengekalkan URL production yang sama. Jangan cipta deployment berasingan kecuali memang dimaksudkan, dan jangan anggap `clasp push` mengubah production behavior.
+- Rujuk `CURRENT_STATUS.md` untuk checkpoint lengkap dan urutan sesi seterusnya.
+
+---
+
+## [16 Jul 2026] — Fix: Panel Pertukaran Guru bocor ke semua page admin
+
+### Fixed
+- **Bug:** `#seksyenPertukaranGuru` (panel "🔄 Pertukaran Guru") dalam `portal.html` didapati muncul di **semua page admin** (Utama, Kehadiran, Murid, Yuran, dll), bukan hanya di page "Senarai Guru".
+- **Punca:** Div `#seksyenPertukaranGuru` diletakkan **di luar** `<section class="panel" id="panel-guru">` (selepas tag `</section>` penutup), sebagai sibling dalam DOM, bukan child dalam mana-mana `.panel`. Fungsi `showPanel(name)` hanya toggle class `.active` pada elemen `.panel`; sebab div ni bukan `.panel`, visibility dia cuma dikawal oleh check `isAdmin` dalam fungsi auth (`updateAuthUI`) tanpa mengambil kira panel mana yang active — jadi bila admin login, dia terus visible di semua page.
+
+### Changed
+- Pindahkan `#seksyenPertukaranGuru` supaya jadi child dalam `<section class="panel" id="panel-guru">`, sebelum tag `</section>` penutup panel-guru. `#modalPertukaranConfirm` kekal di posisi asal (luar section, global modal).
+- Susun semula urutan dalam `panel-guru` supaya "🔄 Pertukaran Guru" (tajuk + panel dropdown Guru Asal/Guru Baharu + butang Pindah Murid) jadi kandungan utama **paling atas**, diikuti tajuk "Senarai Guru" + jadual `table#guruTable` di bawahnya.
+- Logik `isAdmin` toggle (`seksyenPertukaran.style.display = isAdmin ? '' : 'none'`) dalam `updateAuthUI` dikekalkan tanpa perubahan — masih perlu untuk sorok panel ni daripada guru biasa (bukan admin) walaupun di page Senarai Guru.
+
+### Verified
+- Confirm secara visual: panel Pertukaran Guru sekarang **hanya** muncul di page "Senarai Guru", tiada lagi di page Kehadiran/Murid/Yuran.
+- Confirm urutan akhir dalam `panel-guru`: back button → Pertukaran Guru (tajuk + panel) → Senarai Guru (tajuk) → jadual guru.
+- Tiada fungsi JS disentuh (`loadGuruList`, `sahkanPertukaran`, `ptPilihSemua`, `onPtGuruAsalChange`, `onPtGuruBaruChange`, `bukaPtConfirmModal`, dll) — hanya perubahan struktur/kedudukan HTML.
+- Tag div/section disahkan seimbang selepas setiap pemindahan.
+
+### Not yet done
+- Belum deploy ke production — masih edit local, menunggu test manual penuh (login admin + login guru biasa) sebelum GAS Deploy → Manage deployments → New version.
+- Ditemui isu berasingan semasa test: refresh page pada desktop (`window.innerWidth > 1024`) log out session, sebab `tryAutoLogin()` ada early-return `if (!_isMobile) return;` — fungsi restore session hanya jalan untuk mobile. Token desktop disimpan dalam `sessionStorage` tapi tiada logik restore UI bila refresh. Bug ni pre-existing (bukan disebabkan fix di atas), belum diperbaiki lagi.
+
+### Deploy
+- Code.js + portal.html: copy-paste manual ke GAS Editor → New version → Deploy (clasp masih tidak digunakan sepenuhnya, rujuk entry "Deployment Incident").
+
+---
+
 ## [30 Jun 2026] — Queue #9 — eBayar Master / Yuran V2 shadow foundation
 
 ### Added
@@ -307,7 +372,7 @@ Ustaz Shafie → 71 murid AKTIF, totalSesi 159, `unmatched []`
 ### Deploy
 - GAS Version 149 (14 Jun 2026)
 - Git pushed ke `origin` (BurnDVS/SPKM-SyafieLegacy) dan `pages` (shafielegacy/SPKM)
-- **PENTING:** `clasp push` sahaja tidak update URL live — mesti **Deploy → Manage Deployments → Edit → New version → Deploy**
+- **PENTING:** `clasp push` sahaja tidak update code/behavior yang diserve oleh existing production Web App. Mesti **Deploy → Manage Deployments → Edit active Web App → New version → Deploy**; URL production kekal sama dan deployment baharu tidak diperlukan.
 
 ---
 

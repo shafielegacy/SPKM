@@ -1,111 +1,64 @@
 # Sistem Pengurusan Kelas Mengaji Syafie Legacy (SPKM)
 
-![Logo](https://i.ibb.co/93rXrkZq/LOGO-SL.png)
+SPKM ialah portal pengurusan kelas mengaji untuk pendaftaran murid, kehadiran, yuran, carian rekod, pengurusan guru dan operasi pentadbiran.
 
-> **Status:** Fasa 1 aktif  
-> **Platform:** Google Apps Script + Google Sheets + GitHub Pages PWA  
-> **Portal Mobile:** https://shafielegacy.github.io/SPKM
+## Status Semasa
 
----
+Setakat 16 Ogos 2026:
 
-## Ringkasan
+- PWA awam beroperasi seperti biasa dan telah disahkan secara visual.
+- eBayar legacy kekal digunakan untuk Januari hingga Ogos 2026.
+- Native eBayar disediakan untuk September 2026 dan bulan seterusnya, tertakluk kepada bulan semasa dan Portal Mode.
+- Portal Mode semasa ialah `AUTO`: legacy sebelum 1 September 2026 dan Native mulai tarikh tersebut.
+- Migrasi serta validasi shadow eBayar V2 bagi Januari hingga Ogos 2026 telah selesai.
+- Kod Native eBayar Phase 2A dan Phase 2B telah disiapkan serta dihantar ke editor/source Apps Script, tetapi belum diuji dengan transaksi sebenar. Existing active Web App production belum ditetapkan kepada versi baharu yang mengandungi Phase 2A/2B.
 
-SPKM ialah sistem pengurusan kelas mengaji berasaskan Google Workspace. Sistem ini membantu urusan pendaftaran murid, rekod kehadiran, pengurusan yuran, semakan bayaran, slip pendaftaran, sijil khatam, dan notifikasi operasi kelas.
-
-Sistem ini dibina untuk kegunaan pentadbiran Syafie Legacy dan menggunakan Google Sheets sebagai pangkalan data utama.
-
----
+Rujuk [CURRENT_STATUS.md](CURRENT_STATUS.md) sebelum memulakan kerja atau deployment seterusnya.
 
 ## Modul Utama
 
-### Pendaftaran
-- Daftar murid kanak-kanak dengan pengesahan OTP email.
-- Daftar murid dewasa dengan pengesahan OTP email.
-- Jana slip pendaftaran secara automatik.
-- Sekat pendaftaran berganda berdasarkan No. MYKID/MYKAD.
-- Sokong status murid `AKTIF` dan `TIDAK AKTIF`.
-
-### Kehadiran
-- Guru boleh rekod kehadiran murid mengikut sesi.
-- Paparan statistik kehadiran mengikut guru dan murid.
-- Senarai murid guru dibaca daripada data pendaftaran aktif.
-- ✅ Guru Backup/Relief — `getMuridByGuru` check `GURU_BACKUP` sekali, badge "Ganti" di checklist, `simpanKehadiran` auto-split rekod relief ke tab guru tetap (30 Jun 2026).
-- ✅ Murid Tanpa Guru — panel admin untuk tetapkan guru kepada murid AKTIF yang belum ada guru tetap, dengan safety check anti-overwrite (16 Jul 2026).
-
-### Yuran
-- Dashboard yuran bulanan.
-- Rekod bayaran tunai.
-- Semakan status bayaran oleh ibu bapa atau penjaga.
-- Senarai murid belum bayar untuk tindakan susulan.
-- eBayar Master / Yuran V2 sedang disediakan secara internal/shadow sahaja; live SPKM masih guna flow legacy.
-
-### Guru & Murid
-- Senarai murid kanak-kanak dan dewasa.
-- Kemaskini status murid.
-- Senarai guru dan maklumat asas.
-- Carta organisasi.
-
-### PWA Mobile
-- Portal mobile melalui GitHub Pages.
-- Boleh dipasang ke home screen.
-- Service worker untuk pengalaman mobile lebih lancar.
-
----
+- Pendaftaran murid kanak-kanak dan dewasa dengan pengesahan OTP.
+- Kehadiran guru, termasuk sokongan guru backup/relief.
+- Dashboard yuran, sejarah bayaran dan eSemak.
+- Legacy eBayar melalui Google Form bagi tempoh sejarah.
+- Native eBayar berbilang murid dengan semakan kelayakan, slip bank dan resit PDF.
+- Pengurusan murid, guru, pertukaran guru dan WhatsApp blast.
+- PWA untuk akses mudah alih.
 
 ## Struktur Projek
 
-```text
-SPKM/
-├── Code.js          # Backend Google Apps Script
-├── index.html       # Portal mobile PWA / GitHub Pages
-├── portal.html      # Portal desktop
-├── config.json      # Konfigurasi aplikasi
-├── manifest.json    # PWA manifest
-├── sw.js            # Service worker
-├── appsscript.json  # Konfigurasi Apps Script
-└── *.md             # Nota dan changelog projek
-```
+- `Code.js` — backend Google Apps Script.
+- `portal.html` — antaramuka portal GAS.
+- `index.html` — PWA awam di GitHub Pages.
+- `TestWA.js` — helper berkaitan WhatsApp.
+- `appsscript.json` — konfigurasi Apps Script.
+- `sw.js` dan `manifest.json` — service worker dan manifest PWA.
+- `CURRENT_STATUS.md` — checkpoint operasi semasa dan langkah sesi seterusnya.
+- `REFERENCE.md` — rujukan teknikal dan deployment.
+- `INTERNAL_OPERATIONS.md` — runbook operasi dalaman.
+- `SPKM_V2_PLAN.md` — pelan asal dan rekod milestone V2.
+- `CHANGELOG.md` — sejarah perubahan.
 
----
+## Deployment
 
-## Teknologi
+Repositori menggunakan dua remote dengan tujuan berbeza:
 
-- Google Apps Script
-- Google Sheets
-- Google Drive
-- HTML, CSS, JavaScript
-- GitHub Pages
-- PWA manifest + service worker
+- `origin` — repositori pembangunan/sumber.
+- `pages` — repositori production GitHub Pages.
 
----
+Push ke `origin` tidak mengemas kini laman Pages. Sebelum push ke `pages`, fetch kedua-dua remote dan semak divergence. Untuk Apps Script, `clasp push` hanya mengemas kini editor/source. Production behavior hanya berubah apabila existing active Web App deployment diedit dan ditetapkan kepada `New version`; URL deployment production yang sama perlu dikekalkan. Jangan cipta deployment baharu kecuali memang dimaksudkan.
 
-## Status Ringkas
+## Privasi dan Keselamatan
 
-| Modul | Status |
-|---|---|
-| Pendaftaran murid | Aktif |
-| OTP email | Aktif |
-| Semakan duplicate MYKID/MYKAD | Aktif |
-| Kehadiran guru | Aktif |
-| Dashboard yuran | Aktif |
-| eBayar / eSemak | Aktif |
-| Sijil khatam | Aktif |
-| PWA mobile | Aktif |
+- Jangan masukkan ID murid berasaskan MyKid/MyKad ke browser atau dokumentasi awam.
+- Jangan masukkan credential, token, data peribadi atau pautan fail private dalam commit.
+- Jangan bypass sempadan bulan, duplicate guard, lock atau semakan pasca-write untuk ujian mudah.
+- Jangan jalankan semula bayaran apabila keputusan write tidak pasti; semak staging terlebih dahulu.
 
----
+## Dokumentasi
 
-## Privasi & Operasi
-
-Maklumat dalaman seperti ID spreadsheet, URL deployment Apps Script, token integrasi, workflow deploy, dan nota pentadbiran tidak dipaparkan dalam README awam.
-
-Rujukan teknikal penuh disimpan dalam dokumentasi private/local projek.
-
----
-
-## Changelog
-
-Lihat [CHANGELOG.md](CHANGELOG.md) untuk rekod perubahan utama.
-
----
-
-Sistem ini dibangunkan untuk operasi kelas mengaji Syafie Legacy menggunakan ekosistem Google Workspace.
+- Status semasa: [CURRENT_STATUS.md](CURRENT_STATUS.md)
+- Operasi dalaman: [INTERNAL_OPERATIONS.md](INTERNAL_OPERATIONS.md)
+- Rujukan teknikal: [REFERENCE.md](REFERENCE.md)
+- Pelan V2: [SPKM_V2_PLAN.md](SPKM_V2_PLAN.md)
+- Sejarah perubahan: [CHANGELOG.md](CHANGELOG.md)

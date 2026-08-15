@@ -90,3 +90,7 @@ nama.replace(/\s+/g, ' ').trim().toUpperCase()
 ```
 
 Tujuan: elak mismatch antara `sudahBayarSet` dan `eligibleSet2` bila nama ada double spaces atau spacing pelik.
+
+## Konteks Semasa — 16 Ogos 2026
+
+Dokumen ini menerangkan pembaikan legacy Google Form dan dikekalkan sebagai rekod sejarah. Januari–Ogos 2026 terus menggunakan aliran legacy ini, jadi pembaikan Calculation/form ini tidak boleh dibuang selagi operasi dan sejarah legacy masih diperlukan. Native eBayar bermula September 2026, menulis terus ke Master V2 dan tidak bergantung pada tab Calculation legacy untuk merekod bayaran Native. Ia tidak menggantikan atau menulis semula rekod legacy terdahulu. Existing active Web App production belum ditetapkan kepada versi yang mengandungi Native Phase 2A/2B, dan transaksi Native sebenar masih belum dilakukan. Rujuk `CURRENT_STATUS.md` sebelum sebarang operasi atau deployment.

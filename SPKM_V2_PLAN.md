@@ -1,7 +1,8 @@
-# SPKM V2 — Pelan Pembangunan
+# SPKM V2 — Pelan Pembangunan dan Rekod Milestone
 
-> **Status:** Perancangan
-> **Prinsip utama:** SPKM V1 kekal sebagai production stabil. Semua pembangunan V2 dibuat secara berasingan supaya operasi eBayar, eSemak, pendaftaran dan akses guru/admin yang sedang live tidak terganggu.
+> **Status 16 Ogos 2026:** Bahagian awal dokumen ini ialah pelan asal dan dikekalkan sebagai rekod sejarah. Migrasi serta reconciliation eBayar V2 Januari–Ogos 2026, maintenance sync, Portal Mode dan kod Native eBayar Phase 2A/2B telah siap. Ini **bukan** full production cutover: transaksi Native sebenar dan penerimaan `/dev` masih belum dilakukan, dan existing active Web App production belum ditetapkan kepada versi yang mengandungi Phase 2A/2B. Rujuk `CURRENT_STATUS.md` untuk checkpoint berkuat kuasa.
+>
+> **Prinsip utama:** SPKM production mesti kekal stabil. Januari–Ogos 2026 kekal legacy-only; Native eBayar bermula September 2026 dan hanya boleh dipromosi ke production selepas ujian terkawal diluluskan.
 
 ---
 

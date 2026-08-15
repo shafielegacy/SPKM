@@ -2,7 +2,7 @@
 
 Dokumen ini menyimpan nota operasi yang tidak sesuai dipaparkan dalam `README.md` public GitHub, tetapi masih berguna untuk rujukan projek.
 
-Maklumat paling sensitif seperti credential sebenar, private URL, token, dan ID penuh kekal dirujuk melalui dokumen local/private seperti `CLAUDE.md`, `AGENTS.md`, dan `REFERENCE.md`.
+Maklumat sensitif seperti credential sebenar dan token tidak boleh dimasukkan ke dokumentasi repository. ID operasi yang diluluskan direkodkan dalam `REFERENCE.md` dan `CURRENT_STATUS.md`; `CLAUDE.md` serta `AGENTS.md` hanya menyimpan pointer dan safety invariants.
 
 ---
 
@@ -18,10 +18,14 @@ Maklumat paling sensitif seperti credential sebenar, private URL, token, dan ID 
 | Deploy mobile | Push ke `origin` dan `pages` |
 
 Nota penting:
+- Current checkpoint ialah `612128e`; `origin` dan `pages` telah aligned pada checkpoint itu pada 16 Ogos 2026.
+- Push ke `origin` tidak update production Pages. Fetch kedua-dua remote, semak divergence dan hanya kemudian gunakan explicit `git push pages main:main`.
+- Jangan stage semua fail secara membuta tuli; semak dirty worktree dan stage fail yang diluluskan sahaja.
 - Bila deploy GAS, pastikan deployment type ialah **Web App**, bukan Library.
 - `clasp push` hanya update source code dalam editor Apps Script.
 - Untuk apply ke production, mesti buat:
   `Deploy -> Manage deployments -> Edit -> New version -> Deploy`
+- Ini mengemas kini existing active Web App deployment dan mengekalkan URL production yang sama. Jangan cipta deployment baharu kecuali memang dimaksudkan.
 - Jangan guna `clasp deploy` untuk workflow production SPKM kerana ia boleh hasilkan deployment URL baru.
 
 Fallback jika `clasp login` gagal:
@@ -139,7 +143,100 @@ nama.replace(/\s+/g, ' ').trim().toUpperCase()
 - Custom mesej WA dengan `[BULAN]`.
 - Timestamp blast WA.
 
-#### eBayar V2 Shadow Workflow
+#### eBayar V2 — Current Operational State
+
+Checkpoint 16 Ogos 2026:
+
+- Januari–Ogos 2026 ialah legacy-only. Native eBayar bermula September 2026.
+- Migration/reconciliation V2 Januari–Ogos telah selesai. Januari–Julai sepadan tepat; Ogos ialah 68 paid, 117 unpaid, 185 total dan RM2,520 dengan semua diffs sifar.
+- Julai catch-up: 39 source groups, 60 child rows, RM1,870. Final July: 71/71 groups unchanged, 0 changed, 0 new.
+- Ogos catch-up melalui source row 47: 46 groups, 69 child rows, RM2,520. Final August: 46 unchanged, 0 changed, 0 new.
+- September legacy ialah header-only; tiada legacy import September diperlukan.
+- Historical anomaly `GROUP_ID_MULTIPLE_STAGED_HASHES` pada `PG-2026-JUN2026-112` kekal untuk audit dan tidak berkaitan catch-up Julai/Ogos.
+
+Canonical `Payments` schema:
+
+`PAYMENT_ID`, `PAYMENT_GROUP_ID`, `TIMESTAMP`, `TAHUN`, `BULAN`, `BULAN_KEY`, `NAMA_MURID_RAW`, `NAMA_MURID_NORM`, `STUDENT_ID`, `NO_MYKID_MYKAD`, `STUDENT_TYPE`, `JUMLAH`, `AMOUNT_TOTAL`, `AMOUNT_ALLOCATED`, `STATUS`, `KAEDAH`, `RESIT_URL`, `SOURCE_YEAR`, `SOURCE_SHEET`, `SOURCE_ROW`, `SOURCE_ROW_HASH`, `MATCH_STATUS`, `MATCH_CONFIDENCE`, `NOTE`, `CREATED_AT`, `UPDATED_AT`.
+
+#### Generic Current-Month Sync
+
+Maintenance berada dalam panel Yuran yang authenticated, kelihatan kepada admin sahaja, dan setiap tindakan sensitif tetap memerlukan backend admin authorization.
+
+- Default preview/read-only; write hanya selepas admin mengesahkan preview.
+- Import hanya source groups yang diklasifikasikan genuinely new.
+- Maksimum 25 groups setiap batch.
+- Identity diperiksa melalui `PAYMENT_GROUP_ID`, exact source location, `SOURCE_ROW_HASH` dan secondary content fingerprint.
+- Write path menggunakan ScriptLock, fresh post-lock source reread/TOCTOU validation, final staging recheck dan satu bulk `setValues()`.
+- Semua conflict dikumpul sebelum write; tiada partial-write loop.
+- Selepas write, staging diverifikasi. Jika hasil write tidak pasti, jangan jalankan sync kali kedua sebelum rekod disemak.
+- Last August state: 46 existing, 0 new/review, projected RM0, status `Synced`.
+
+#### Portal Mode Operations
+
+- Allowed: `AUTO`, `LEGACY`, `NATIVE`, `BOTH`.
+- Property: `EBAYAR_PORTAL_MODE`; invalid/missing → `AUTO`.
+- Audit: `EBAYAR_PORTAL_MODE_UPDATED_AT`, `EBAYAR_PORTAL_MODE_UPDATED_BY`.
+- Cutoff: 1 September 2026, Malaysia time.
+- `AUTO` resolves `LEGACY` before cutoff and `NATIVE` from cutoff onward.
+- Current mode is `AUTO`. `BOTH` was tested on `/dev` and restored to `AUTO`.
+- Fail-safe frontend resolution before cutoff is legacy; Native submission authorization remains server-side.
+- Legacy future cards may be visible with `Akan Datang`, but their payment controls remain disabled until current.
+
+#### Native Phase 2A — Payment Write
+
+- Supports 1–5 students with one shared month, date, amount, optional transaction reference and bank slip.
+- Stable student identities are `KANAK:<BIL>` and `DEWASA:<BIL>`. Browser never receives MyKid/MyKad as selector ID.
+- Same-name students remain distinct by `studentKey`. Current official record and submitted name must match exactly.
+- Native duplicate checks use `STUDENT_ID`; historical rows without it use conservative normalized-name fallback. Ambiguous fallback blocks the submission.
+- Unpaid-only search is UX filtering only. Preflight and locked duplicate recheck remain authoritative and all-or-nothing.
+- Slip raw size limit is 3 MB. Encoded length/whitespace are rejected before decode; MIME, extension and file signature are verified after decode.
+- ScriptLock surrounds final duplicate validation and one bulk payment `setValues()`.
+- Native rows use `STATUS=SELESAI`, `KAEDAH=NATIVE_EBAYAR`, `SOURCE_SHEET=NATIVE_EBAYAR`, stable `STUDENT_ID` and Native source metadata. `MATCH_STATUS`/`MATCH_CONFIDENCE` remain blank because this is direct identity resolution, not migration matching.
+- Payment `NOTE` is compact JSON. `AMOUNT_TOTAL` may repeat per child row, but reporting deduplicates by group.
+- Orphan file cleanup is attempted when safe. A post-write uncertain response means inspect staging; never retry automatically.
+
+#### Native Phase 2B — Receipt and Privacy
+
+- Payment lock is released before receipt generation; receipt uses its own lock.
+- Validate the complete payment group and build a canonical snapshot before generating anything.
+- One private temporary Google Doc is created, converted to PDF and trashed.
+- Exactly one final PDF per group is stored in the receipt folder. Only that file becomes anyone-with-link/view.
+- Every child row receives the same `RESIT_URL`.
+- Existing one consistent receipt URL returns idempotent success. Mixed URLs or partial state return review; do not create another receipt blindly.
+- Receipt failure does not reverse payment and must never cause a second payment write.
+- Receipt excludes MyKid/MyKad, phone, email, address, slip URL and internal hashes.
+- Frontend opens a ready receipt in a new window with `noopener`; if not ready, it clearly reports payment success with receipt unavailable.
+
+Drive controls:
+
+- `NATIVE_EBAYAR_SLIP_FOLDER_ID`: verify the configured value in Apps Script Script Properties. Folder `SPKM - Native eBayar Slips` and its files remain private/restricted; never link-share.
+- `NATIVE_EBAYAR_RECEIPT_FOLDER_ID`: verify the configured value in Apps Script Script Properties. Folder `SPKM - Native eBayar Receipts` preferably remains Restricted; only final PDFs are link-view.
+
+#### September First-Transaction Checklist
+
+1. Confirm repository and both remote tips, dirty worktree and checkpoint `612128e`.
+2. Confirm Portal Mode `AUTO` and both Drive folder IDs/sharing.
+3. Use `/dev`; verify Native UI and server actions without adding a pre-September bypass.
+4. On or after September, choose one genuinely unpaid official student and a small valid slip.
+5. Submit once. If the result is uncertain, stop and inspect; do not retry.
+6. Verify one payment group, expected child count, stable IDs, amount semantics, status/source fields and no duplicates.
+7. Verify slip privacy and absence of public sharing.
+8. Verify one final receipt PDF, one common `RESIT_URL`, safe content and the temporary Doc trashed.
+9. Exercise the receipt read/generation path again to confirm idempotency and no second PDF/payment.
+10. Only after approval, edit the existing active GAS Web App deployment and assign `New version`, preserving the same production URL. Do not create a separate deployment unless explicitly intended.
+11. Reverify the public PWA and keep Portal Mode `AUTO`.
+
+#### Failure and Rollback Rules
+
+- Pre-write validation/lock/conflict failure: no payment should be assumed written; correct the cause and preview again.
+- Network or post-write verification uncertainty: assume the outcome is unknown, inspect `Payments`, group identity and Drive artifacts before any action.
+- Receipt failure after confirmed payment: payment remains valid; investigate receipt state only, never resubmit payment.
+- If a new GAS version causes a production issue, restore the previous deployment version while keeping Portal Mode `LEGACY` if necessary. Do not rewrite historical rows as rollback.
+- If Pages is wrong, identify the last verified Pages commit and perform a reviewed forward fix or authorized rollback; do not force-push casually.
+
+#### Historical eBayar V2 Shadow Workflow — Superseded
+
+The notes below describe the initial 1–2 July shadow migration and are retained for audit. Their progress counts and proposed next steps are no longer current; use the sections above and `CURRENT_STATUS.md`.
 
 - Current live yuran/eBayar flow remains **LEGACY**.
 - V2 is backend-only shadow/read model in `Code.js`; no UI is switched to V2 yet.
@@ -289,6 +386,8 @@ SELEPAS LOGIN:
 ---
 
 ## Archive Note
+
+All Queue #9 checkpoint sections below are historical logs superseded by the verified 16 August 2026 state.
 
 Fail ini diwujudkan selepas `README.md` dibersihkan supaya muka depan GitHub tidak memaparkan nota operasi internal. Maklumat yang dikeluarkan dari README disimpan di sini atau di `REFERENCE.md`, `CHANGELOG.md`, `CLAUDE.md`, dan `AGENTS.md`.
 ## Queue #9 eBayar V2 Staging Import Checkpoint Correction — 1 Jul 2026
