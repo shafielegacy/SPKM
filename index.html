@@ -5041,7 +5041,7 @@
     if (!guruAsal) { ptSemakEnableBtn(); return; }
 
     document.getElementById('ptLoadingMsg').style.display = 'block';
-    callGAS('getMuridByGuruUntukTukar', { namaGuru: guruAsal },
+    callGAS('getMuridByGuruUntukTukar', { namaGuru: guruAsal, token: _spkm_st.getItem('spkm_token') },
       function(data) {
         document.getElementById('ptLoadingMsg').style.display = 'none';
         if (!data.success) {
@@ -5191,7 +5191,7 @@
       mtgPopulasiDropdown();
     }
 
-    callGAS('getMuridTanpaGuru', {},
+    callGAS('getMuridTanpaGuru', { token: _spkm_st.getItem('spkm_token') },
       function(data) {
         document.getElementById('mtgLoadingMsg').style.display = 'none';
         if (!data.success) {
@@ -6086,7 +6086,7 @@
     const btn = document.getElementById('submitCashBtn');
     btn.classList.add('loading'); btn.disabled = true;
 
-    callGAS('recordCash', { nama, jumlah: parseFloat(jumlah), tarikh, bulan },
+    callGAS('recordCash', { nama, jumlah: parseFloat(jumlah), tarikh, bulan, token: _spkm_st.getItem('spkm_token') },
       function(data) {
         btn.classList.remove('loading'); btn.disabled = false;
         if (data.success) {
@@ -6845,7 +6845,7 @@
     if (monthSelect) {
       var lastEnabled = '';
       Array.prototype.forEach.call(monthSelect.options, function(option) {
-        option.disabled = option.value > malaysiaMonthKey;
+        option.disabled = option.value > malaysiaMonthKey || (option.dataset && option.dataset.paymentBlocked === 'true');
         if (!option.disabled) lastEnabled = option.value;
       });
       var beforeNativeEbayarLaunch = malaysiaMonthKey < '2026-09';
@@ -7200,7 +7200,9 @@
       var button = document.createElement('a');
       button.id = 'ebtn-' + index;
       button.className = 'ebayar-btn' + (month.routeType === 'NATIVE' ? ' native-route' : '');
-      if (month.state === 'UPCOMING') {
+      if (month.routeType === 'NATIVE' && month.paymentPolicy === 'BLOCKED') {
+        button.textContent = month.paymentBlockedReason || 'Kutipan dihentikan'; button.setAttribute('aria-disabled', 'true'); button.tabIndex = -1;
+      } else if (month.state === 'UPCOMING') {
         button.textContent = 'Akan Datang'; button.setAttribute('aria-disabled', 'true'); button.tabIndex = -1;
       } else if (month.routeType === 'LEGACY') {
         button.href = legacyEbayarLinks2026[index]; button.target = '_blank'; button.rel = 'noopener noreferrer'; button.textContent = '💳 Bayar Yuran';
@@ -7249,7 +7251,8 @@
         year.months.forEach(function(month) {
           if (month.routeType !== 'NATIVE' || month.state === 'UPCOMING') return;
           var nativeOption = document.createElement('option');
-          nativeOption.value = month.bulanKey; nativeOption.textContent = month.label + ' ' + year.year;
+          nativeOption.value = month.bulanKey;
+          nativeOption.dataset.paymentBlocked = month.canPay === false ? 'true' : 'false'; nativeOption.textContent = month.label + ' ' + year.year + (month.paymentPolicy === 'BLOCKED' ? ' · ' + month.paymentBlockedReason : '');
           nativeSelect.appendChild(nativeOption);
         });
       });
