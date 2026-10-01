@@ -4,6 +4,21 @@ Semua perubahan utama sistem direkodkan di sini.
 
 ---
 
+## [1 October 2026] — Native eBayar v1.0.1
+
+- `Bayaran Untuk` moved above `Pilih Murid / Anak`.
+- October 2026 remains selected after choosing students.
+- Current month selection uses the server/Malaysia date.
+- App version: `v1.0.1`.
+- Service worker cache: `spkm-v13`.
+- Production repository: `shafielegacy/SPKM`.
+- Source repository: `BurnDVS/SPKM-SyafieLegacy`.
+- Production commits: `fb12ee6` and `9483088`.
+- Manual production preflight verified with 2 students and RM40.
+- Pushing only to the source repository does not update production GitHub Pages.
+
+---
+
 ## [15–16 Ogos 2026] — Checkpoint: Native eBayar Phase 2A/2B dan kesinambungan operasi
 
 ### Completed
