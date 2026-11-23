@@ -5927,7 +5927,7 @@
       for (var b = 0; b < batchCount; b++) {
         var start = b * 40 + 1;
         var end   = Math.min((b + 1) * 40, count);
-        var masa  = b === 0 ? 'Sekarang' : (b * 8) + ' minit lagi';
+        var masa  = '~' + ((b + 1) * 10) + ' minit lagi';
         batchHtml += '<div style="display:flex;justify-content:space-between;align-items:center;' +
           'padding:5px 8px;background:#F0F4FF;border-radius:6px;font-size:12px;">' +
           '<span style="color:#0A1F44;font-weight:500;">Batch ' + (b+1) + ': ' + start + '–' + end + ' orang</span>' +

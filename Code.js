@@ -1375,8 +1375,6 @@ function setFonnteToken() {
 // Jalankan dari editor untuk test token — hantar pada nombor anda sahaja.
 // ============================================================
 function testFonnteToken() {
-  var token = PropertiesService.getScriptProperties().getProperty('FONNTE_TOKEN');
-  Logger.log('Token dalam Properties: [' + token + '] (panjang: ' + (token ? token.length : 0) + ')');
   var result = hantarWhatsApp('60172875136', '[TEST] Token Fonnte berjaya. Boleh abaikan mesej ini.');
   Logger.log('Test result: ' + result);
 }
@@ -8814,8 +8812,8 @@ function queueWABlast(params) {
 
     var totalQueued  = rows.length;
     var batchCount   = Math.ceil(totalQueued / 40);
-    // 40 mesej × 5 saat = 200 saat = ~3.3 min per batch + 8 min gap antara batch
-    var estimasiMinit = Math.ceil((totalQueued * 5) / 60) + (batchCount - 1) * 8;
+    // Anggaran termasuk sela trigger pertama dan masa memproses batch terakhir.
+    var estimasiMinit = batchCount * 10 + Math.ceil((Math.min(totalQueued, 40) * 5) / 60);
 
     setupBlastTrigger();
 
@@ -8888,7 +8886,7 @@ function blastQueueProcessor() {
   }
 }
 
-// setupBlastTrigger — pasang time-based trigger setiap 8 minit jika belum ada
+// setupBlastTrigger — pasang time-based trigger setiap 10 minit jika belum ada
 function setupBlastTrigger() {
   var existing = ScriptApp.getProjectTriggers();
   var sudahAda = existing.some(function(t) {
@@ -8897,9 +8895,9 @@ function setupBlastTrigger() {
   if (!sudahAda) {
     ScriptApp.newTrigger('blastQueueProcessor')
       .timeBased()
-      .everyMinutes(8)
+      .everyMinutes(10)
       .create();
-    Logger.log('setupBlastTrigger: Trigger blastQueueProcessor dipasang (8 minit).');
+    Logger.log('setupBlastTrigger: Trigger blastQueueProcessor dipasang (10 minit).');
   }
 }
 
