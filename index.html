@@ -5910,9 +5910,13 @@
     el._t = setTimeout(function() { el.classList.remove('show'); }, 4000);
   }
 
-  function waConfirm(count, bulan, mesejTemplate) {
+  function waConfirm(muridList, bulan, mesejTemplate) {
+    const count = muridList.filter(function(murid) { return murid.telefon !== ''; }).length;
+    const skipped = muridList.length - count;
+    const batchSize = 12;
     return new Promise(function(resolve) {
-      document.getElementById('waConfirmCount').textContent = count + ' murid';
+      document.getElementById('waConfirmCount').textContent = count + ' murid dengan nombor';
+      document.getElementById('waConfirmSkipped').textContent = skipped + ' rekod';
       document.getElementById('waConfirmBulan').textContent = bulan;
 
       var previewMesej = (mesejTemplate || '')
@@ -5922,18 +5926,19 @@
       if (previewMesej.split('\n').length > 3) lines.push('...');
       document.getElementById('waConfirmPreview').textContent = lines.join('\n');
 
-      var batchCount = Math.ceil(count / 40);
+      var batchCount = Math.ceil(count / batchSize);
       var batchHtml  = '';
       for (var b = 0; b < batchCount; b++) {
-        var start = b * 40 + 1;
-        var end   = Math.min((b + 1) * 40, count);
-        var masa  = b === 0 ? 'Sekarang' : (b * 8) + ' minit lagi';
+        var start = b * batchSize + 1;
+        var end   = Math.min((b + 1) * batchSize, count);
+        var masa  = b === 0 ? 'Trigger seterusnya' : '±' + (b * 10) + ' minit selepas pusingan pertama';
         batchHtml += '<div style="display:flex;justify-content:space-between;align-items:center;' +
           'padding:5px 8px;background:#F0F4FF;border-radius:6px;font-size:12px;">' +
           '<span style="color:#0A1F44;font-weight:500;">Batch ' + (b+1) + ': ' + start + '–' + end + ' orang</span>' +
           '<span style="color:#666;">' + masa + '</span></div>';
       }
       document.getElementById('waConfirmBatchList').innerHTML = batchHtml;
+      document.getElementById('waConfirmSchedule').hidden = batchCount === 0;
 
       var modal = document.getElementById('waConfirmModal');
       modal.style.display = 'flex';
@@ -5983,16 +5988,20 @@
     if (!bulan) { waToast('Sila pilih bulan dahulu.', 'warn'); return; }
 
     const mesejTemplate = (document.getElementById('waCustomMesej').value || '').trim();
-    const confirmed = await waConfirm(currentBelumBayar.length, bulan, mesejTemplate);
+    const muridList = currentBelumBayar.map(function(m) {
+      return { nama: m.nama, telefon: String(m.telefon || '').trim() };
+    });
+    if (!muridList.some(function(murid) { return murid.telefon !== ''; })) {
+      waToast('Tiada nombor telefon dalam senarai ini.', 'warn');
+      return;
+    }
+    const confirmed = await waConfirm(muridList, bulan, mesejTemplate);
     if (!confirmed) return;
 
     const btn = document.getElementById('btnHantarWA');
     btn.classList.add('loading'); btn.disabled = true;
 
     try {
-      const muridList = currentBelumBayar.map(function(m) {
-        return { nama: m.nama, telefon: String(m.telefon || '') };
-      });
       const res = await callGASPromise('queueWABlast', {
         token:          _spkm_st.getItem('spkm_token'),
         mesejTemplate:  mesejTemplate,
@@ -6000,7 +6009,7 @@
         muridList:      muridList
       });
       if (res.success) {
-        waToast('✅ ' + res.totalQueued + ' mesej dijadualkan. Blast akan selesai dalam lebih kurang ' + res.estimasiMinit + ' minit.', 'ok');
+        waToast('✅ ' + res.totalQueued + ' rekod dimasukkan ke giliran. Penghantaran bermula pada trigger seterusnya.', 'ok');
         waUpdateLastSent();
         showBlastBadge();
         startBlastPolling();
@@ -7950,6 +7959,10 @@
           <span class="wa-modal-info-val" id="waConfirmCount">—</span>
         </div>
         <div class="wa-modal-info-row">
+          <span class="wa-modal-info-label">Tanpa nombor (dilangkau)</span>
+          <span class="wa-modal-info-val" id="waConfirmSkipped">—</span>
+        </div>
+        <div class="wa-modal-info-row">
           <span class="wa-modal-info-label">Bulan</span>
           <span class="wa-modal-info-val" id="waConfirmBulan">—</span>
         </div>
@@ -7967,12 +7980,13 @@
 
       <div style="background:#E8F4FD; border:1px solid #B3D4ED; border-radius:8px; padding:10px 12px; font-size:12px; color:#0A1F44; margin-bottom:14px;">
         ✅ Sistem akan sambung automatik walaupun anda logout atau tutup browser<br>
-        ⏱ Delay 5 saat antara setiap mesej
+        ⏱ Sekurang-kurangnya 20 saat antara percubaan penghantaran<br>
+        Maksimum 12 percubaan setiap pusingan 10 minit
       </div>
 
       <div class="wa-modal-actions">
         <button class="wa-btn-batal" id="waConfirmBatal">✕ Batal</button>
-        <button class="wa-btn-ya" id="waConfirmYa">📤 Ya, Hantar Sekarang</button>
+        <button class="wa-btn-ya" id="waConfirmYa">📤 Ya, Masukkan ke Giliran</button>
       </div>
     </div>
   </div>
